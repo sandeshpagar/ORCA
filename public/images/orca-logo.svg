@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="orcaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B3D62"/>
+      <stop offset="100%" stop-color="#1FA2A8"/>
+    </linearGradient>
+  </defs>
+  <rect width="120" height="120" rx="28" fill="url(#orcaGrad)"/>
+  <!-- Stylized dorsal fin & satellite radar waves symbolizing ISRO marine AI -->
+  <path d="M38 78 C38 60, 48 42, 68 34 C64 48, 74 62, 82 78 Z" fill="#FFFFFF" opacity="0.95"/>
+  <!-- Radar / Ocean pulse wave -->
+  <path d="M32 86 C46 80, 74 80, 88 86" stroke="#1FA2A8" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <circle cx="68" cy="34" r="4" fill="#FF6B4A"/>
+</svg>
