@@ -1,94 +1,188 @@
 # System Architecture — ORCA
 
+> **v2 revision note:** aligned to the "ORCA SIH Detailed Project Documentation
+> v2 (Tourist)" spec. Adds an explicit **Advisory/RAG Agent** node, a formal
+> **LangGraph state schema**, a **security rule** (role is never trusted from
+> the browser), and a **failure/data-honesty strategy** (LIVE/CACHED/DEMO).
+> Frontend (already built) is structurally unaffected.
+
 ## 1. High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                            CLIENT (Browser/Mobile)                   │
-│   Next.js React App — Chat UI | Map (MapLibre+deck.gl) | Dashboards  │
-└───────────────┬─────────────────────────────────┬────────────────────┘
-                │ HTTPS/REST/SSE                   │ Supabase Realtime (WS)
-┌───────────────▼─────────────────────────────────▼────────────────────┐
-│                    NEXT.JS API ROUTES (Backend-for-Frontend)          │
-│  /api/chat  /api/map-layers  /api/alerts  /api/export  /api/auth/*   │
-└───────────────┬──────────────────────┬────────────────┬──────────────┘
-                │                      │                │
-      ┌─────────▼────────┐   ┌─────────▼────────┐  ┌────▼─────────────┐
-      │  Agent Orchestr.  │   │  Data Access      │  │ Alert Engine     │
-      │  (LangGraph/LLM   │   │  Layer (queries   │  │ (cron/edge fn →  │
-      │  tool-calling)    │   │  Supabase/PostGIS)│  │ evaluates thresh-│
-      │  Tools:           │   │                   │  │ olds → inserts   │
-      │  - get_sst        │   └─────────┬─────────┘  │ alerts row)      │
-      │  - get_chloro     │             │            └────┬─────────────┘
-      │  - get_weather     │             │                 │
-      │  - get_pfz         │             │                 │
-      │  - get_alerts      │             │                 │
-      │  - rag_search      │             │                 │
-      └─────────┬──────────┘             │                 │
-                │ (calls)                 │                 │
-┌───────────────▼─────────────────────────▼─────────────────▼──────────┐
-│                        SUPABASE (Postgres + PostGIS + pgvector)       │
-│  Tables: users, profiles, roles, sst_data, chlorophyll_data,         │
-│  weather_data, pfz_zones, alerts, saved_locations, chat_history,     │
-│  knowledge_docs(embeddings)                                          │
-│  + Supabase Auth + Supabase Storage + Supabase Realtime               │
-└───────────────┬─────────────────────────────────────────────────────┘
-                │ scheduled ingestion (cron / edge function trigger)
-┌───────────────▼─────────────────────────────────────────────────────┐
-│         INGESTION MICROSERVICE (optional, Python FastAPI)             │
-│  Pulls: INCOIS PFZ, Open-Meteo Marine, IMD bulletins, sample ISRO EO  │
-│  Normalizes → GeoJSON/time-series → writes to Supabase                │
+│                       CLIENT (Browser/Mobile)                         │
+│   Next.js React App (already built) — Monitor | AI Chat | Alerts |    │
+│   Profile | Guide (URL-only)                                          │
+│   Auth: Supabase JS client (direct login/signup/session)              │
+└───────────────┬─────────────────────────────────┬─────────────────────┘
+                │ HTTPS + Bearer: Supabase JWT      │ Supabase Realtime (WS,
+                │ (REST + SSE for chat streaming)   │  direct from client)
+┌───────────────▼─────────────────────────────────┐│
+│                  FASTAPI BACKEND (Python)         ││
+│  Routers: /chat  /map-layers  /alerts  /export    ││
+│           /profile  /activity                     ││
+│  ┌──────────────────────────────────────────────┐││
+│  │ Auth dependency: verifies Supabase JWT,       │││
+│  │ DERIVES role/activity from profiles table —   │││
+│  │ never trusts a role sent by the browser       │││
+│  └──────────────────────────────────────────────┘││
+│  ┌──────────────────────────────────────────────┐││
+│  │ LANGGRAPH — role-aware ORCA graph (see §2)     │││
+│  └──────────────────────────────────────────────┘││
+│  ┌──────────────────────────────────────────────┐││
+│  │ Ingestion jobs (APScheduler): pull INCOIS/     │││
+│  │ Bhuvan/Open-Meteo/IMD → normalize →            │││
+│  │ `observations` + `data_sources` tables         │││
+│  └──────────────────────────────────────────────┘││
+└───────────────┬───────────────────────────────────┘│
+                │ SQLAlchemy/asyncpg + supabase-py      │
+┌───────────────▼───────────────────────────────────▼──────────────────┐
+│                 SUPABASE (Postgres + PostGIS + pgvector)              │
+│  Tables (v2 schema — see `04_Design_Document.md` §4):                │
+│  profiles, tourist_preferences, conversations, messages, locations,  │
+│  data_sources, observations, map_features, risk_assessments,         │
+│  activity_assessments, documents, document_chunks, feedback,         │
+│  audit_events                                                        │
+│  + Supabase Auth (issues JWTs) + Storage + Realtime                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-*(Current trimmed build note: the client is 4 screens — Style Guide, Monitor, AI Chat, Alerts — designed in Stitch and generated via Antigravity. "Dashboards" referenced anywhere in this doc means the role-aware widget panel inside the single Monitor screen, not separate dashboard routes. See `04_Design_Document.md` §0.1.)*
 
-## 2. Agentic AI Flow (per chat message)
-1. **User message received** (with context: role, current map viewport, selected location if any).
-2. **Intent classification** — agent decides: data lookup / comparison / advisory / export / general Q&A.
-3. **Tool selection & call** — agent invokes one or more tools (`get_sst`, `get_weather`, `get_alerts`, `rag_search`, etc.) with parameters (lat/lon/region, date range).
-4. **Data retrieval** — Data Access Layer queries Supabase/PostGIS, returns structured JSON.
-5. **Synthesis** — LLM composes a role-aware natural-language answer + structured payload (map layer to highlight, chart data, safety badge).
-6. **Response render** — frontend renders text + inline widgets (mini-map, chart, alert card) + cites data source/timestamp.
-7. **Persisted** — chat turn + retrieved sources logged to `chat_history` for auditability/history.
+**Two independently deployable services:** Next.js frontend (Vercel) and
+FastAPI backend (Render/Railway), sharing one Supabase project. Supabase
+Realtime is subscribed to **directly by the frontend** for alert push — not
+proxied through FastAPI.
+
+## 2. Multi-Agent System (LangGraph, role-aware)
+
+```
+User Query (+ role + activity + location + time_window)
+        ↓
+   Planner Agent  ← identifies role + activity + intent + location + time
+        ↓
+  ┌──────────────┬──────────────┬──────────────┐
+  ↓              ↓              ↓
+Weather        Ocean          GIS
+Agent          Agent          Agent
+  ↓              ↓              ↓
+  └──────────────┴──────────────┘
+        ↓
+  Advisory / RAG Agent  ← retrieves grounding docs (regulations, safety
+        ↓                  guidance, tourism advisories) via pgvector
+  Activity Suitability + Risk  ← DETERMINISTIC, not an LLM call
+        ↓
+  Recommendation Agent  ← explains the result; does not invent measurements
+        ↓
+  Chat + Map + Evidence (final_response, sources, map highlight)
+```
+
+| Node | Type | Responsibility | Tools / inputs |
+|---|---|---|---|
+| **Planner Agent** | LLM agent | Identifies role, activity, intent, location, time window from the query + profile context; decides which specialists to invoke (see §2.2 routing table) | none directly — routes only |
+| **Weather Agent** | LLM agent | Wind speed, wave height, forecast, storm/lightning | `get_weather`, `get_cyclone_track` |
+| **Ocean Agent** | LLM agent | SST, chlorophyll, PFZ zones | `get_sst`, `get_chlorophyll`, `get_pfz` |
+| **GIS Agent** | LLM agent | Nearby beaches/POIs, distance to restricted/protected areas, point-in-polygon, viewport queries | `get_nearby_features`, `intersect_zone`, `get_bbox_features` (PostGIS via GeoAlchemy2) |
+| **Advisory / RAG Agent** | LLM agent | Retrieves relevant chunks from `document_chunks` (regulations, safety guidance, tourism advisories) and surfaces source titles | `rag_search` (pgvector similarity) |
+| **Activity Suitability + Risk** | **Deterministic Python function** (not an LLM call) | Combines Weather/Ocean/GIS/Advisory outputs against threshold rules → `risk_result` + `activity_suitability` (score: LOW/MODERATE/HIGH/UNSUITABLE + factors + explanation) | none — pure logic |
+| **Recommendation Agent** | LLM agent | Turns risk/suitability + role + activity into the final natural-language answer with citations/badges/chart data | consumes `risk_result`, `activity_suitability`, `sources` |
+
+**5 LLM agents** (Planner, Weather, Ocean, GIS, Advisory/RAG) **+ Recommendation Agent as a 6th**, comfortably exceeding the "collaborative agents" bar, with the actual safety/suitability score kept deterministic and reproducible.
+
+### 2.1 LangGraph state schema
+```json
+{
+  "user_id": "...",
+  "role": "tourist",
+  "language": "en",
+  "activity": "beach_visit",
+  "user_query": "...",
+  "location": {"...": "..."},
+  "time_window": {"...": "..."},
+  "intent": "...",
+  "weather_result": {"...": "..."},
+  "ocean_result": {"...": "..."},
+  "gis_result": {"...": "..."},
+  "advisory_result": {"...": "..."},
+  "risk_result": {"...": "..."},
+  "activity_suitability": {"...": "..."},
+  "sources": ["..."],
+  "errors": ["..."],
+  "final_response": "..."
+}
+```
+This state object flows through the whole graph — every node reads what it needs and writes its own result key, so the full reasoning trace is inspectable (and loggable to `audit_events`).
+
+### 2.2 Activity-based routing (example: Tourist)
+```
+tourist + beach_visit       → weather + ocean + advisory + GIS
+tourist + boating           → weather + ocean + advisory + GIS
+tourist + sightseeing       → weather + GIS + advisory        (skips ocean)
+tourist + water_recreation  → weather + ocean + advisory + GIS
+```
+The Planner applies an equivalent routing table per role — not every query needs every specialist (e.g. a pure SST-trend Researcher question skips GIS entirely). **Do not build a separate agent graph per role** — one shared graph, routed differently.
+
+### 2.3 Per-message flow
+1. **User message received** via `POST /chat`, with the Supabase JWT verified and role/activity derived server-side from `profiles`/`tourist_preferences` (never trusted from the request body — see §3.3).
+2. **Planner Agent** identifies intent, activity, location, time window and decides which specialists to invoke.
+3. **Specialist agents run** (async, parallel via `asyncio.gather` where more than one is invoked).
+4. **Advisory/RAG Agent** retrieves grounding documents relevant to the query/role/activity.
+5. **Activity Suitability + Risk** (deterministic) combines all of the above into a score + factors + explanation.
+6. **Recommendation Agent** synthesizes everything into the final role-appropriate answer, citing sources.
+7. **Response streamed back** (SSE), rendered as text + inline widgets, with the **actual agent workflow visible** in the UI (Planner → Weather → Ocean → GIS → Advisory → Suitability → Risk → Recommendation) — never a fake progress animation (v2 spec, Phase 2B).
+8. **Persisted** to `conversations`/`messages`, with `risk_assessments`/`activity_assessments` as separate auditable records, and the full graph state (or a summary of it) logged to `audit_events`.
 
 ## 3. Role-Based Response Shaping
-Single agent, persona-conditioned system prompt + output formatter:
-- Fisherman → short verdict, PFZ overlay, local language option.
-- Researcher → data table/chart + export link + methodology note.
-- Coastal Authority → severity-tagged alert summary + affected-population estimate + map heat overlay.
-- Tourist → safety badge (green/yellow/red) + plain-language explanation, no jargon.
-- Maritime Operator → route-safety summary + hazard list along route.
+The Recommendation Agent applies persona-conditioned formatting on top of the shared pipeline, weighted per the signal table in `01_PRD.md` §4.2:
+- Tourist → suitability score + best time window + key reasons + warnings + sources, plain language, never "safe" — "more suitable based on available conditions."
+- Fisher → PFZ + operational safety verdict + reasons + sources.
+- Authority → severity-tagged summary + affected-population estimate + map heat overlay.
+- Researcher → data/chart + export link + methodology note.
+- Disaster Management → hazard/affected-area focus.
+- General → plain conditions summary, no persona-specific framing.
 
-## 4. Data Model Domains (see Design Document for full schema)
-- **Identity:** `users`, `profiles` (role, preferred_language, home_region)
-- **Oceanographic:** `sst_readings`, `chlorophyll_readings`, `weather_forecasts` (all geo-indexed via PostGIS `geometry`/`geography` columns, time-indexed)
-- **Zones/Advisories:** `pfz_zones`, `alerts` (type, severity, geom polygon, valid_from/to)
-- **Personalization:** `saved_locations`, `notification_subscriptions`
-- **Conversation:** `chat_sessions`, `chat_messages`, `chat_message_sources`
-- **RAG:** `knowledge_docs` (content + `vector` embedding column via pgvector)
+## 4. Security Rule (from v2 spec §3.3)
+> **Never trust a role sent by the browser.** The backend derives the
+> authoritative role from the authenticated user's profile. UI role selection
+> is only a user-facing choice during onboarding or profile editing — it is
+> never read as an authorization signal on any request.
 
-## 5. Alerting Pipeline
-1. Ingestion service/edge function periodically fetches weather/cyclone data.
-2. A rules engine (simple threshold checks: wind speed, wave height, cyclone proximity) evaluates against `alerts` criteria.
-3. New/updated alert rows inserted into `alerts` table (PostGIS polygon for affected region).
-4. Supabase Realtime pushes change → connected clients update map + show banner.
-5. Users with matching `notification_subscriptions` (by region) get in-app + (stretch) email notification via Supabase Edge Function + Resend/SendGrid.
+Concretely: every FastAPI route that needs role/activity looks it up from
+`profiles`/`tourist_preferences` via the verified `user_id`, ignoring any
+`role` field the client might include in a request body.
 
-## 6. Security Architecture
-- **Supabase Auth** issues JWT; role stored in `profiles.role` and mirrored into JWT custom claim (via Postgres function/trigger) for RLS checks.
-- **Row-Level Security (RLS)** on all user-scoped tables (`saved_locations`, `chat_sessions`, `notification_subscriptions`) — a user can only read/write their own rows.
-- Reference/oceanographic data tables are public-read (no PII), write-restricted to service role (ingestion pipeline only).
-- API routes validate JWT server-side before calling privileged operations.
-- Exported files served via **signed URLs** (short expiry) from Supabase Storage.
+## 5. Failure & Data-Honesty Strategy (from v2 spec §3.4)
+```
+External source available?
+  YES → retrieve + timestamp + source → label LIVE
+  NO  → cached/demo fixture, only if permitted for that context
+        → label CACHED or DEMO
+        → never pretend fallback data is live
 
-## 7. Scalability Notes (post-hackathon path)
-- Swap mock/public data ingestion for real ISRO Bhuvan/MOSDAC feeds — only the ingestion microservice changes, rest of the architecture is unaffected.
-- Move agent orchestration to a dedicated service (separate from Next.js API routes) if concurrency grows.
-- Add tile server (e.g., Martin/pg_tileserv) for large raster SST layers instead of client-side GeoJSON if data volume grows.
-- Read replicas / connection pooling (Supabase supports PgBouncer) as user load grows.
+Agent failure → record error in `errors` (graph state) / audit_events
+             → continue if safe to do so with reduced scope
+             → lower confidence / explicitly explain the limitation to the user
+```
+This is enforced at the `data_sources`/`observations` layer (every observation row carries its source and an implicit mode via `data_sources.reliability`/freshness) and surfaced in the Recommendation Agent's output — sources are always shown with their retrieval time.
+
+## 6. Data Model Domains
+See `04_Design_Document.md` §4 for the full v2 schema. Domains:
+- **Identity:** `profiles` (role — locked, derived server-side), `tourist_preferences`
+- **Conversation:** `conversations`, `messages`
+- **Personalization:** `locations` (saved places)
+- **Data & provenance:** `data_sources` (registry, reliability, updated_at), `observations` (normalized readings, replaces separate SST/chlorophyll/weather tables)
+- **Geospatial:** `map_features` (beaches, POIs, zones)
+- **Auditable outputs:** `risk_assessments`, `activity_assessments`
+- **RAG:** `documents`, `document_chunks` (pgvector embedding)
+- **Quality/trust:** `feedback`, `audit_events`
+
+## 7. Alerting Pipeline
+1. **APScheduler job inside FastAPI** periodically pulls weather/cyclone data via `httpx`, writes to `observations` with `data_sources` provenance.
+2. **Activity Suitability + Risk** module (same deterministic code used in the chat flow) evaluates thresholds against fresh observations.
+3. New/updated alert-worthy conditions written as `risk_assessments` rows and/or into an `alerts`-equivalent surfaced via `map_features`/dedicated alert rows — using the Supabase **service role key** (FastAPI-only, never exposed to the frontend).
+4. **Supabase Realtime** pushes the change directly to connected clients.
+5. Notification dispatch (if added) is a FastAPI background task.
 
 ## 8. Deployment Topology
-- `apps/web` → Vercel (auto-deploy on push to `main`).
-- Supabase project → hosted DB/Auth/Storage/Realtime.
-- `services/ingestion` (if used) → Render/Railway, triggered by cron (or Supabase scheduled Edge Function calling it).
-- Environment secrets (LLM API key, Supabase service role key, data source keys) via Vercel/Render env vars — never in repo.
+- `apps/web` → **Vercel**, unchanged.
+- `services/api` → **Render or Railway**, Docker-based.
+- Supabase project → shared by both services.
+- Secrets (`SUPABASE_JWT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`) live only in FastAPI's env; frontend only holds `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`.

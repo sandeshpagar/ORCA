@@ -1,102 +1,142 @@
 # Tech Stack Document — ORCA
 
+> **v2 revision note:** aligned to the "ORCA SIH Detailed Project Documentation
+> v2 (Tourist)" spec. Core stack confirmed: **Next.js + TypeScript (frontend,
+> already built) • FastAPI + Python (backend) • LangGraph (agents) • Supabase
+> (Postgres + PostGIS + pgvector + Auth + Storage) • MapLibre/Leaflet •
+> deterministic Risk/Suitability Engine.** New in this revision: scientific
+> processing libs promoted to primary (not just future-proofing), an explicit
+> evals layer, and a documented LLM-boundary principle.
+
 ## 1. Guiding principles
-- Fast to vibe-code phase-wise (popular, well-documented, AI-tool-friendly stack).
-- Single repo, deployable as a web app (SIH judging = live demo/URL).
-- Free-tier friendly for hackathon (Supabase, Vercel, map tile providers).
+- Frontend is already built and working — Antigravity must **inspect, preserve, and extend it**, never replace it with a starter template.
+- Backend is a separate, independently deployable Python service.
+- **LLM boundary (important):** use the LLM for semantic work only — intent, planning, tool selection, explanation, localization. Use APIs/databases for facts, PostGIS for spatial operations, and deterministic Python logic for risk/suitability scoring. **Never let the LLM invent current marine measurements or safety scores.**
 
-## 2. UI Design Tool (new — precedes frontend build)
+## 2. UI Design Tool (already used — historical record)
 | Layer | Choice | Why |
 |---|---|---|
-| UI/UX design | **Google Stitch** (stitch.withgoogle.com) | AI-generated screen designs from text prompts; exports as images and/or HTML/CSS and can push to Figma. Used to design every screen *before* code generation, so the vibe-coding tool has a concrete visual target instead of improvising layout/spacing each phase. |
+| UI/UX design | **Google Stitch** | Generated screen designs, exported and built into working Next.js code via **Antigravity**. Frontend complete for Monitor, AI Chat, Alerts, Guide (URL-only), Login, Signup, Profile. |
 
-**Workflow implication:** design and code are now two explicit passes —
-1. **Design pass (Stitch):** generate & refine each screen (onboarding, dashboards, chat, map, alerts) as a Stitch project; export screens as PNG/JPG (and HTML/CSS if Stitch's export is usable) into `docs/stitch-exports/`.
-2. **Build pass (vibe-coding tool):** each phase prompt now includes "replicate the attached/referenced Stitch design for screen X" instead of asking the AI to invent layout — it only needs to translate Stitch's HTML/CSS or image into working Next.js + Tailwind/shadcn components and wire in real data/logic.
-
-This keeps visual design consistent and judge-facing polish high, while letting the coding tool focus purely on functionality.
-
-## 3. Frontend
+## 3. Frontend (built — extend, don't replace)
 | Layer | Choice | Why |
 |---|---|---|
-| Framework | **Next.js 14+ (App Router) + React + TypeScript** | SSR for fast first load, API routes for backend-for-frontend, huge AI-tool training coverage → best vibe-coding results |
-| Styling | **Tailwind CSS + shadcn/ui** | Rapid, consistent, accessible components; easy for AI tools to generate |
-| Maps | **MapLibre GL JS** (or Leaflet if simpler) + **deck.gl** for heatmap/GeoJSON overlays | Open-source, no vendor lock, supports raster (SST tiles) + vector (zones, alerts) layers |
-| Charts | **Recharts** | Simple time-series/trend charts for Researcher persona |
-| Chat UI | Custom React chat component (streaming via SSE/fetch) | Full control over role-aware rendering (cards, maps-in-chat, source citations) |
-| State mgmt | **Zustand** (or React Query for server state) | Lightweight, avoids Redux boilerplate |
-| i18n | **next-intl** | Multilingual support for fishermen/tourists |
-| PWA | `next-pwa` (stretch) | Offline/low-bandwidth support for field users |
+| Framework | **Next.js 14+ (App Router) + React + TypeScript** | Already built. Calls FastAPI instead of implementing business logic itself. |
+| Styling | **Tailwind CSS + shadcn/ui** | Already in place. |
+| Maps | **MapLibre GL JS** (or Leaflet) + **deck.gl** | Already integrated into Monitor; extend with Tourist layers (beaches/POIs, restricted areas, suitability overlay) in Phase 3. |
+| Charts | **Recharts** | Researcher trend widgets. |
+| Chat UI | Existing AI Chat screen | Extend to show **real agent progress** (Planner → Weather → Ocean → GIS → Advisory → Suitability → Risk → Recommendation) — never a fake progress animation. |
+| State mgmt | **Zustand** / React Query | Map viewport, chat state, caching FastAPI responses. |
+| Auth (client) | **Supabase JS client** | Frontend talks to Supabase Auth directly for login/signup/session; JWT attached as Bearer token to FastAPI calls. |
+| i18n | **next-intl** | English/Hindi/Marathi/Gujarati/Odia/Tamil already scoped in the UI; backend translation support stages in English→Hindi→Marathi first (Phase 4). |
 
-## 4. Backend / API
-| Layer | Choice | Why |
+## 4. Backend — Python FastAPI
+
+```
+Next.js (frontend, already built)
+   │
+   │ HTTPS (Bearer: Supabase JWT)
+   ▼
+FastAPI (Python)
+   │
+   ├── Authentication      — verifies Supabase JWT, derives role from profile (never trusts client-sent role)
+   ├── API endpoints       — /chat, /map-layers, /alerts, /export, /profile, /activity, etc.
+   ├── Agent system        — LangGraph: Planner, Weather, Ocean, GIS, Advisory/RAG, Recommendation
+   ├── Data processing     — ingestion/normalization, LIVE/CACHED/DEMO source tracking
+   ├── Risk/Suitability engine — deterministic
+   └── Database            — Supabase (Postgres + PostGIS + pgvector) via SQLAlchemy/asyncpg
+```
+
+| Component | Choice | Why |
 |---|---|---|
-| App server | **Next.js API Routes / Route Handlers** (or a separate **Node.js/Express** service if agent logic gets heavy) | Same repo, simple deploy; split out later if needed |
-| Agentic AI orchestration | **Anthropic Claude API (tool use) or LangChain/LangGraph** (Node or Python microservice) | Tool-calling agent pattern: intent → tool selection → data fetch → synth |
-| Background jobs / ingestion | **Supabase Edge Functions** (Deno) or a small **Python (FastAPI + APScheduler/Celery)** ingestion service | Scheduled pulls of SST/chlorophyll/weather data, normalize → DB |
-| Realtime alerts | **Supabase Realtime** (Postgres changes → websocket) | Push new alerts to connected clients instantly |
+| Web framework | **FastAPI** | Async-native, automatic OpenAPI docs, strong typing via Pydantic |
+| Server | **Uvicorn**, optionally behind **Gunicorn** in production | Standard FastAPI deployment |
+| Data validation | **Pydantic v2** | Request/response schemas mirroring the DB schema |
+| DB access | **SQLAlchemy 2.0 (async) + GeoAlchemy2**, or `asyncpg` for raw queries | Typed geometry columns matching PostGIS schema |
+| Supabase integration | **`supabase-py`** for Auth/Storage calls, SQLAlchemy/asyncpg for direct Postgres/PostGIS queries | Supabase's Python client covers Auth/Storage; direct SQL is cleaner for spatial queries |
+| Auth verification | **PyJWT** validating Supabase's JWT as a FastAPI dependency (`Depends(get_current_user)`) | Token issuance stays with Supabase (frontend); enforcement lives in FastAPI |
+| Background jobs / scheduling | **APScheduler** (in-process for hackathon simplicity) | Scheduled ingestion of weather/SST/chlorophyll/alerts |
+| Data processing | **Pandas, NumPy, xarray, GeoPandas** | Promoted to primary now (not just future-proofing) — needed from Phase 1 for scientific/geospatial normalization into the `observations` table |
+| Geospatial (future) | **shapely**, and **netCDF4/rasterio** if raw MOSDAC satellite files are added later | Real NetCDF/raster support if you extend beyond public-data substitutes post-hackathon |
 
-> If the agent logic needs Python-native geospatial/data libs (xarray, netCDF4, rasterio) for parsing ISRO/INCOIS datasets, run a **separate lightweight Python microservice (FastAPI)** just for data ingestion/processing, called by the Next.js backend — keeps the AI orchestration and web layers simple while giving you real geospatial tooling.
-
-## 5. Database & Auth
-| Layer | Choice | Why |
-|---|---|---|
-| Database | **Supabase (Postgres + PostGIS)** | See full evaluation in doc `05_Database_Auth_Evaluation.md` — recommended |
-| Auth | **Supabase Auth** | Email/password + OAuth (Google) + role-based metadata, RLS integration |
-| File/dataset storage | **Supabase Storage** | Store exported CSV/GeoJSON, cached raster tiles |
-| Vector store (for RAG) | **pgvector (Supabase extension)** | Keep RAG in the same Postgres instance, no extra vendor |
-
-## 6. AI / ML Layer
+## 5. AI / Multi-Agent Layer
 | Component | Choice |
 |---|---|
-| LLM | Claude (Anthropic API) or GPT-4-class model, via tool-calling/function-calling |
-| RAG embeddings | OpenAI/Anthropic/Voyage embeddings → stored in `pgvector` |
-| Agent framework | LangChain.js / LangGraph.js (TS, matches Next.js) — or plain function-calling loop if simpler |
-| Geospatial reasoning tools | Custom "tools" exposed to the agent: `get_sst(lat,lon,date)`, `get_chlorophyll(...)`, `get_weather(...)`, `get_active_alerts(region)`, `get_pfz(region)` |
+| LLM | **Claude API (Anthropic Python SDK)** by default — simplest, no infra to manage, best quality for a judged demo. *Optional:* a local/open model (e.g. via Ollama) can be swapped in for cost-free early development, since LangGraph's tool-calling pattern is largely model-agnostic — not required unless you want to avoid API costs during heavy iteration. |
+| Agent orchestration | **LangGraph (Python)** — fits the Planner → {Weather, Ocean, GIS} → Advisory/RAG → Suitability/Risk → Recommendation graph topology directly |
+| Agents | Planner, Weather, Ocean, GIS, Advisory/RAG, Recommendation — see `03_System_Architecture.md` §2 |
+| Risk/Suitability Engine | Deterministic Python module — **not** an LLM call |
+| RAG embeddings | Anthropic/OpenAI/Voyage embeddings (Python SDKs) → `pgvector` |
 
-## 7. External Data Sources (prototype-realistic substitutes for ISRO feeds)
-| Data | Source (demo-usable) |
-|---|---|
-| SST / Chlorophyll | INCOIS PFZ advisories (public), Bhuvan open data, NOAA CoastWatch (if accessible), or synthetic GeoJSON grid for demo |
-| Weather / marine forecast | **Open-Meteo Marine & Weather API** (free, no key needed) |
-| Cyclone/storm tracks | IMD/RSMC public bulletins (manual/periodic ingestion for demo) |
-| Coastal admin boundaries | Bhuvan/Survey of India open GeoJSON, or naturalearthdata.com |
+## 6. Database & Auth
+| Layer | Choice | Why |
+|---|---|---|
+| Database | **Supabase (Postgres + PostGIS)** | See `05_Database_Auth_Evaluation.md` for the full evaluation and v2 schema |
+| Auth (issuance) | **Supabase Auth**, called directly from the Next.js frontend | Standard, secure |
+| Auth (enforcement) | **FastAPI dependency verifying the Supabase JWT**, deriving role from `profiles` — **never trusting a role sent by the browser** (UI role selection is only a user-facing choice during onboarding, not an authorization signal) | Security rule from the v2 spec, §3.3 of Architecture doc |
+| File/dataset storage | **Supabase Storage** via `supabase-py` (service role key, server-only) | Researcher exports, RAG source documents |
+| Vector store (RAG) | **pgvector** | `document_chunks.embedding` |
 
-*(Document clearly in your submission that ISRO's live data pipeline is simulated using public equivalents due to hackathon-time API access constraints — judges expect this and it's fine to state explicitly.)*
+## 7. Evaluation / Testing Layer (new)
+| Component | Choice | Purpose |
+|---|---|---|
+| Backend tests | **pytest** | Auth, role access, tourist profile, chat schema, agent unit tests |
+| Agent regression | **Golden query set** (see Design Doc §4.4) | Fixed set of role+activity+query → expected_tools pairs, run after every phase to catch regressions |
+| Metrics tracked | Intent/location extraction accuracy, tool selection accuracy, grounded-claim accuracy, risk reproducibility, source attribution, spatial accuracy (targets in PRD §9) | Objective "is this phase actually working" signal, not just vibes |
 
-## 8. DevOps / Hosting
+## 8. External Data Sources
+| Data | Source (demo-usable) | Mode tracking |
+|---|---|---|
+| SST / Chlorophyll | INCOIS PFZ advisories, Bhuvan WMS/GeoJSON, or demo fixture | `data_sources.reliability` + LIVE/CACHED/DEMO label per observation |
+| Weather / marine forecast | **Open-Meteo Marine & Weather API** | Same |
+| Cyclone/storm tracks | IMD/RSMC public bulletins | Same |
+| Coastal admin/protected boundaries, beaches/POIs | Bhuvan/Survey of India open GeoJSON, naturalearthdata.com, or curated demo seed | Same |
+| RAG advisory/research documents | Public marine safety guidelines, coastal regulations, tourism advisories | Ingested into `documents`/`document_chunks` |
+
+*(All plain HTTP/JSON/GeoJSON/WMS — fetchable via `httpx` in FastAPI. No NetCDF/raster parsing required for this plan.)*
+
+## 9. DevOps / Hosting
 | Layer | Choice |
 |---|---|
-| Hosting (frontend+API) | **Vercel** (free tier, Next.js native) |
-| DB/Auth hosting | **Supabase Cloud** (free tier) |
-| Python microservice (if used) | **Render/Railway** free tier |
-| CI | GitHub Actions (lint/build check on push) |
-| Monitoring | Vercel Analytics + Supabase logs (sufficient for hackathon) |
+| Frontend hosting | **Vercel** (unchanged) |
+| Backend hosting | **Render or Railway** |
+| DB/Auth hosting | **Supabase Cloud** |
+| Containerization | **Docker** for the FastAPI service |
+| CORS | FastAPI allows the Vercel frontend origin + `localhost` |
+| CI | GitHub Actions — separate frontend/backend workflows, backend workflow runs `pytest` + golden-query eval |
+| API docs | FastAPI's automatic OpenAPI/Swagger UI (`/docs`) |
 
-## 9. Repo Structure (single repo, monorepo-lite)
-> **Note:** this is a reference target, written before Antigravity generated the
-> actual project from the Stitch export. Antigravity's generated structure may
-> differ (e.g. no `apps/` monorepo split) — that's fine; reconcile against this
-> only if you need to add pieces (ingestion service, agent-tools package) that
-> weren't part of the frontend generation.
+## 10. Repo Structure
 ```
 orca/
 ├─ apps/
-│  └─ web/                # Next.js app (frontend + API routes)
+│  └─ web/                 # Next.js frontend (already built — preserve as-is)
 ├─ services/
-│  └─ ingestion/           # optional Python FastAPI microservice
-├─ packages/
-│  ├─ ui/                  # shared shadcn/ui components
-│  └─ agent-tools/         # tool definitions for the AI agent
+│  └─ api/                 # FastAPI backend
+│     ├─ app/
+│     │  ├─ main.py
+│     │  ├─ auth/            # JWT verification, role derivation (server-side only)
+│     │  ├─ agents/          # planner.py, weather_agent.py, ocean_agent.py,
+│     │  │                    gis_agent.py, advisory_rag_agent.py,
+│     │  │                    suitability_risk_engine.py, recommendation_agent.py
+│     │  ├─ routers/         # chat.py, map_layers.py, alerts.py, export.py, profile.py, activity.py
+│     │  ├─ db/              # SQLAlchemy models (v2 schema — see Design Doc §4), session
+│     │  ├─ ingestion/       # INCOIS/Bhuvan/Open-Meteo pull + normalize into `observations`
+│     │  └─ schemas/         # Pydantic models
+│     ├─ tests/              # pytest suite + golden_queries.json
+│     ├─ requirements.txt
+│     ├─ Dockerfile
+│     └─ .env.example
 ├─ supabase/
 │  ├─ migrations/
-│  └─ seed.sql
-├─ docs/                   # this document set
-│  └─ stitch-exports/       # exported Stitch screen designs (images/HTML) — build reference
+│  └─ seed.sql               # DEMO seed data, clearly labeled
+├─ docs/
+│  └─ stitch-exports/
 └─ README.md
 ```
 
-## 10. Why this stack fits "vibe coding" phase-wise
-- Next.js + Tailwind + shadcn + Supabase is one of the **most-represented stacks** in AI coding tool training data → fewer hallucinated APIs, higher first-try success.
-- Clear folder boundaries let you prompt phase-by-phase (auth phase touches `apps/web/app/(auth)`, map phase touches `apps/web/app/(map)`, etc.) without cross-contamination.
-- Supabase gives you DB + Auth + Realtime + Storage + Vector in one dashboard — minimizes the number of services an AI tool needs to wire together correctly.
+## 11. Why this stack fits going forward
+- **FastAPI + LangGraph** gives a real, inspectable multi-agent system matching the PS's "Collaborative Agents" framing, with Python's ecosystem built for exactly this orchestration style.
+- **Deterministic Risk/Suitability Engine** keeps the safety-critical judgment auditable and reproducible — a hard requirement for a disaster-management-themed PS, and a metric judges can literally test (100% reproducibility target).
+- **Data-source registry + LIVE/CACHED/DEMO labeling** means the demo never has to pretend fallback data is real — it's honest by construction, which reads well to judges and is the right engineering practice regardless.
+- **Split frontend/backend** lets you keep developing the agent system and data pipeline independently after the hackathon, without touching the UI.

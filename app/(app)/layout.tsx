@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { useAuth, UserRole } from "@/contexts/AuthContext";
+import { useAuth } from "@/contexts/AuthContext";
 import RoleSelectionModal from "@/components/RoleSelectionModal";
 
 interface NavItem {
@@ -20,14 +20,6 @@ const navItems: NavItem[] = [
   { name: "Alerts", href: "/alerts", icon: "fmd_bad", badge: "VARUN" },
 ];
 
-const rolesConfig: { id: UserRole; name: string; icon: string }[] = [
-  { id: "fisherman", name: "Fisherman", icon: "sailing" },
-  { id: "researcher", name: "Researcher", icon: "query_stats" },
-  { id: "authority", name: "Coastal Authority", icon: "shield" },
-  { id: "tourist", name: "Tourist", icon: "beach_access" },
-  { id: "operator", name: "Maritime Operator", icon: "directions_boat" },
-];
-
 export default function AppLayout({
   children,
 }: {
@@ -35,24 +27,7 @@ export default function AppLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { isLoggedIn, isLoading, role, setRole } = useAuth();
-
-  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
-  const roleMenuRef = useRef<HTMLDivElement>(null);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        roleMenuRef.current &&
-        !roleMenuRef.current.contains(event.target as Node)
-      ) {
-        setRoleMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  const { isLoggedIn, isLoading } = useAuth();
 
   // Route protection scaffolding: redirect to /login if not authenticated
   useEffect(() => {
@@ -86,12 +61,9 @@ export default function AppLayout({
     return null;
   }
 
-  const currentRoleConfig =
-    rolesConfig.find((r) => r.id === role) || rolesConfig[0];
-
   return (
     <div className="flex flex-col min-h-screen bg-surface">
-      {/* Role Selection Modal (triggered on first login / via profile) */}
+      {/* Role Selection Modal (triggered on first login / signup only) */}
       <RoleSelectionModal />
 
       {/* Institutional Global Header */}
@@ -160,85 +132,8 @@ export default function AppLayout({
             })}
           </nav>
 
-          {/* Right Controls: Role Switcher Dropdown, Dev-only Guide Icon, Profile Icon */}
+          {/* Right Controls: Profile Avatar Button */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* Quick Role Switcher Dropdown */}
-            <div className="relative" ref={roleMenuRef}>
-              <button
-                type="button"
-                onClick={() => setRoleMenuOpen(!roleMenuOpen)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-surface-container hover:bg-surface-container-high border border-outline-variant/30 text-primary transition-all text-label-sm font-semibold"
-                title="Switch Active Persona"
-              >
-                <span className="material-symbols-outlined text-[16px] text-secondary">
-                  {currentRoleConfig.icon}
-                </span>
-                <span className="hidden sm:inline font-mono uppercase text-[11px]">
-                  {currentRoleConfig.name}
-                </span>
-                <span className="material-symbols-outlined text-[14px]">
-                  {roleMenuOpen ? "expand_less" : "expand_more"}
-                </span>
-              </button>
-
-              {roleMenuOpen && (
-                <div className="absolute right-0 mt-2 w-52 bg-surface-container-lowest rounded-xl shadow-xl border border-surface-container py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
-                  <div className="px-3 py-1.5 text-[10px] font-mono uppercase font-bold text-on-surface-variant border-b border-surface-container">
-                    Switch Operational Role
-                  </div>
-                  {rolesConfig.map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => {
-                        setRole(r.id);
-                        setRoleMenuOpen(false);
-                      }}
-                      className={`w-full px-3 py-2 text-left flex items-center justify-between text-body-sm transition-colors ${
-                        role === r.id
-                          ? "bg-secondary-container/40 text-primary font-bold"
-                          : "text-on-surface hover:bg-surface-container"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[18px] text-secondary">
-                          {r.icon}
-                        </span>
-                        <span>{r.name}</span>
-                      </div>
-                      {role === r.id && (
-                        <span className="material-symbols-outlined text-secondary text-[16px]">
-                          check
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                  <div className="border-t border-surface-container mt-1 pt-1">
-                    <Link
-                      href="/profile"
-                      onClick={() => setRoleMenuOpen(false)}
-                      className="w-full px-3 py-1.5 text-left flex items-center gap-2 text-[12px] text-on-surface-variant hover:text-primary hover:bg-surface-container"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">tune</span>
-                      <span>Manage in Profile</span>
-                    </Link>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Guide Icon Button: Hidden in Production */}
-            {process.env.NODE_ENV !== "production" && (
-              <Link
-                href="/guide"
-                className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high border border-outline-variant/30 flex items-center justify-center text-primary hover:text-secondary transition-colors"
-                title="Guide (Design System & Tokens)"
-              >
-                <span className="material-symbols-outlined text-[18px]">menu_book</span>
-              </Link>
-            )}
-
-            {/* Profile Avatar Button */}
             <Link
               href="/profile"
               className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm text-on-primary transition-all ${

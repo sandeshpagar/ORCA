@@ -1,9 +1,16 @@
 # Design Document — ORCA
 
+> **v2 revision note:** aligned to the "ORCA SIH Detailed Project Documentation
+> v2 (Tourist)" spec. Role set is now `tourist, fisher, authority, researcher,
+> disaster_management, general` (was 5 personas incl. Maritime Operator — see
+> `01_PRD.md` for the full reconciliation note). DB schema (§4) is fully
+> replaced with the v2 normalized/auditable schema. New Tourist-specific UI
+> components (activity selector, suitability card, why panel) are added in §2.6.
+
 ## 0. Design Workflow: Google Stitch → Vibe-Coded UI
 
 ### 0.1 Current build scope (read this first)
-The sections below describe the **full original vision** (5 persona dashboards,
+The sections below describe the **original vision** (persona dashboards,
 separate landing/login/onboarding screens). The **actual build in progress**
 uses a trimmed 4-screen structure, generated in Stitch and exported to
 Antigravity:
@@ -11,14 +18,31 @@ Antigravity:
 | Actual screen | Replaces / merges | Notes |
 |---|---|---|
 | **Style Guide** | — | Internal design-token reference, not a shipped app screen |
-| **Monitor** | Map view + all 5 persona dashboards | One screen; widgets/content shown are **role-aware** (same pattern as chat) rather than separate components per persona — see §2.2 below |
-| **AI Chat** | Chat interface | As originally designed |
+| **Monitor** | Map view + all persona dashboards | One screen; widgets/content shown are **role-aware and, for Tourist, activity-aware** — see §2.4 below |
+| **AI Chat** | Chat interface | Extend to show real agent progress (v2 Phase 2B) |
 | **Alerts** | Alerts center | As originally designed |
-| *(none yet)* | Landing / Login / Onboarding / role selection | **Not designed in Stitch.** Recommended fix: add a simple role dropdown in the app header (reuses the "Main app shell" concept below) instead of a dedicated onboarding flow, to keep scope tight. Auth screens themselves (login/signup) can use a plain Supabase Auth form with minimal styling — low design risk, not worth a Stitch pass. |
+| *(built)* | Landing / Login / Onboarding / role selection | **Built via Antigravity, not Stitch** (functional-first plain forms). Login, Signup, Profile pages exist. Role is set **once** via a first-login modal and **locked afterward** — no header switcher (see §0.1a). |
 
-If you later have time to build out full per-persona dashboards or a proper
-onboarding flow, the original designs in §2 and §3.3 are ready to use as-is —
-this is just documenting what's actually shipping first.
+**Role set update (v2):** the RoleSelectionModal and RoleWidgetPanel currently
+built list 5 roles including **Maritime Operator**. The v2 spec's canonical
+role enum is `tourist, fisher, authority, researcher, disaster_management,
+general` — **Maritime Operator is dropped**, **Disaster Management** and
+**General** are added. This requires an edit (not a rebuild) to the existing
+RoleSelectionModal/RoleWidgetPanel component — see `06_Phasewise_Vibecoding_Prompts.md`
+Phase 1.
+
+### 0.1a Role-lock decision + v2 security rule
+Role is set once at first login and **cannot be changed through any in-app UI
+afterward** (no header dropdown, no editable field on Profile — role shows
+there as a read-only badge). The v2 spec formalizes *why* this matters beyond
+UX: **the backend must never trust a role sent by the browser** — role is
+always derived server-side from `profiles` (see `03_System_Architecture.md`
+§4). The frontend's role display/selection is a convenience, never an
+authorization signal.
+
+**Demo implication:** to show judges all 6 roles, seed 6 separate demo
+accounts (one per role) once Supabase Auth is live, and log out/in between
+them during the demo — see `06_Phasewise_Vibecoding_Prompts.md` Phase 1.
 
 ### 0.2 Process
 UI for ORCA is designed **first in Google Stitch** (stitch.withgoogle.com), then
@@ -46,7 +70,7 @@ layout on the fly.
 
 ## 1. UX Principles
 - **Chat-first, map-second:** every screen keeps a persistent chat affordance; the map is the visual grounding for chat answers.
-- **Role at the center:** role is chosen via a header dropdown (not a dedicated onboarding flow, in the current trimmed build) and always visible/switchable (for demo purposes, easy role-switching is valuable to judges).
+- **Role at the center:** role is chosen **once**, via a first-login modal (not a dedicated onboarding flow, in the current trimmed build). It is **locked after signup** — no header switcher or in-app way to change it, since role gates which data/features a user can access. (For demoing all personas to judges, use separate seeded demo accounts — see `06_Phasewise_Vibecoding_Prompts.md`.)
 - **Trust through evidence:** every AI answer shows a small "Sources" chip (dataset + timestamp).
 - **Progressive disclosure:** Tourist/Fisherman get simple badges by default; "Show details" reveals raw data for power users.
 
@@ -55,17 +79,21 @@ layout on the fly.
 *(§2.1 and §2.4 below describe the full original vision. The current build
 uses only Monitor / AI Chat / Alerts — see §0.1 for what's actually shipping.)*
 
-### 2.1 Onboarding / Auth — full vision (not built yet)
-- Sign up / login (email+password, Google OAuth).
-- Role selection screen (Fisherman / Researcher / Coastal Authority / Tourist / Maritime Operator) — large icon cards.
-- Home region / default location picker (map click or search).
+### 2.1 Auth / Profile — original vision vs. what's built
+Original vision: role selection screen, home region picker, all part of a dedicated onboarding flow.
 
-**Current build instead:** plain Supabase Auth login/signup form (default styling, low design priority) + a role dropdown in the app header (part of Main App Shell, §2.2) that sets `profiles.role` directly — no separate onboarding steps.
+**Actually built:** plain Login/Signup pages (email+password, Google OAuth), a first-login **role-selection modal** (5 persona cards, role locked once chosen — see §0.1a), and a **Profile page** with:
+- Identity card (name, email, sign out)
+- Role shown as a **read-only badge** (not editable)
+- Home region: sector name search + "Use My Location" (browser geolocation)
+- Language selector, in this order: **English, Hindi (हिंदी), Marathi (मराठी), Gujarati (ગુજરાતી), Odia (ଓଡ଼ିଆ), Tamil (தமிழ்)**
+
+No separate onboarding wizard or dedicated route-based dashboard-per-role — everything role-dependent renders inside Monitor (§2.4).
 
 ### 2.2 Main App Shell
-- Bottom nav (mobile) / top nav (desktop): **Guide** (style reference, dev-only), **Monitor**, **AI Chat**, **Alerts**.
-- Header shows the current role (dropdown to switch) and a language switcher.
-- Persistent chat access — either its own "AI Chat" tab (current build) or a collapsible drawer (original vision), your call based on what Antigravity ships from the Stitch export.
+- Header nav: **Monitor**, **AI Chat**, **Alerts** — this is the complete primary nav. **Guide is not in the header at all** (admin/dev-only reference, reachable only by typing `/guide` directly — see §0.1a note below on Guide access).
+- Header shows the current role as a **read-only badge** (not editable — see §0.1a) and a profile icon (links to Profile page, which has the language switcher).
+- Persistent chat access via its own "AI Chat" tab.
 
 ### 2.3 Chat Interface
 - Message bubbles; assistant messages can embed:
@@ -230,153 +258,246 @@ right (desktop) or below (mobile).
 
 *(See `frontend-design` skill guidance when translating these into actual components in code — avoid the default/templated shadcn look; stay faithful to what Stitch produces.)*
 
-## 4. Database Schema (Postgres/PostGIS — Supabase)
+## 4. Database Schema (Postgres/PostGIS — Supabase) — v2 normalized schema
+
+> Replaces the earlier per-datatype schema (separate `sst_readings`,
+> `chlorophyll_readings`, `weather_forecasts`, `alerts` tables) with a
+> normalized, auditable design: one `observations` table for all readings
+> (tagged by type + source), a `data_sources` registry for provenance/
+> reliability tracking, and explicit `risk_assessments`/`activity_assessments`
+> as first-class auditable records.
 
 ```sql
+-- Role enum (constrained, not free text)
+create type user_role as enum ('tourist','fisher','authority','researcher','disaster_management','general');
+
 -- Profiles (extends auth.users)
 create table profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  full_name text,
-  role text check (role in ('fisherman','researcher','coastal_authority','tourist','maritime_operator')) not null,
-  preferred_language text default 'en',
+  display_name text,
+  role user_role not null,
+  language text default 'en',
   home_region geography(Point,4326),
   created_at timestamptz default now()
 );
 
--- Oceanographic time-series (grid or point readings)
-create table sst_readings (
-  id bigint generated always as identity primary key,
-  location geography(Point,4326) not null,
-  value_celsius numeric not null,
-  source text not null,
-  recorded_at timestamptz not null
+-- Tourist-specific personalization (optional, only populated for role='tourist')
+create table tourist_preferences (
+  user_id uuid primary key references profiles(id) on delete cascade,
+  activities text[] default '{}',           -- e.g. {'beach_visit','boating'}
+  travel_style text,
+  updated_at timestamptz default now()
 );
 
-create table chlorophyll_readings (
-  id bigint generated always as identity primary key,
-  location geography(Point,4326) not null,
-  value_mg_m3 numeric not null,
-  source text not null,
-  recorded_at timestamptz not null
-);
-
-create table weather_forecasts (
-  id bigint generated always as identity primary key,
-  location geography(Point,4326) not null,
-  wind_speed_kmh numeric,
-  wave_height_m numeric,
-  condition text,
-  forecast_for timestamptz not null,
-  source text not null,
-  fetched_at timestamptz default now()
-);
-
--- Zones & advisories
-create table pfz_zones (
-  id bigint generated always as identity primary key,
-  region geography(Polygon,4326) not null,
-  description text,
-  valid_from timestamptz,
-  valid_to timestamptz,
-  source text
-);
-
-create table alerts (
-  id bigint generated always as identity primary key,
-  type text check (type in ('cyclone','high_wave','storm_surge','rip_current','other')) not null,
-  severity text check (severity in ('low','moderate','high','severe')) not null,
-  affected_area geography(Polygon,4326) not null,
-  headline text not null,
-  details text,
-  valid_from timestamptz not null,
-  valid_to timestamptz,
-  source text,
+-- Conversations & messages (replaces chat_sessions/chat_messages naming)
+create table conversations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references profiles(id) on delete cascade,
+  title text,
   created_at timestamptz default now()
 );
 
--- Personalization
-create table saved_locations (
+create table messages (
+  id bigint generated always as identity primary key,
+  conversation_id uuid references conversations(id) on delete cascade,
+  role text check (role in ('user','assistant')) not null,
+  content text not null,
+  created_at timestamptz default now()
+);
+
+-- Saved locations
+create table locations (
   id bigint generated always as identity primary key,
   user_id uuid references profiles(id) on delete cascade,
   label text,
-  location geography(Point,4326) not null,
+  geom geography(Point,4326) not null,
   created_at timestamptz default now()
 );
 
-create table notification_subscriptions (
+-- Data source registry (provenance + LIVE/CACHED/DEMO honesty)
+create table data_sources (
   id bigint generated always as identity primary key,
-  user_id uuid references profiles(id) on delete cascade,
-  region geography(Polygon,4326) not null,
-  alert_types text[] default '{}',
+  name text not null,                        -- e.g. 'INCOIS PFZ', 'Open-Meteo Marine'
+  type text not null,                        -- e.g. 'weather','ocean','gis','advisory'
+  reliability text check (reliability in ('live','cached','demo')) not null default 'demo',
+  updated_at timestamptz default now()
+);
+
+-- Normalized observations (replaces separate sst/chlorophyll/weather tables)
+create table observations (
+  id bigint generated always as identity primary key,
+  source_id bigint references data_sources(id),
+  observed_at timestamptz not null,
+  geom geography(Point,4326) not null,
+  metric text not null,                      -- e.g. 'sst_celsius','chlorophyll_mg_m3','wind_kmh','wave_height_m'
+  value numeric not null
+);
+
+-- Map features (beaches, POIs, zones, PFZ, restricted/protected areas)
+create table map_features (
+  id bigint generated always as identity primary key,
+  feature_type text not null,                -- 'beach','poi','pfz_zone','restricted_area','protected_area'
+  name text,
+  geom geography(Geometry,4326) not null,
+  properties jsonb default '{}'
+);
+
+-- Auditable deterministic risk output
+create table risk_assessments (
+  id bigint generated always as identity primary key,
+  conversation_id uuid references conversations(id),
+  score numeric,
+  level text check (level in ('low','moderate','high','severe')),
+  factors jsonb,
   created_at timestamptz default now()
 );
 
--- Conversation / agent
-create table chat_sessions (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references profiles(id) on delete cascade,
-  started_at timestamptz default now()
-);
-
-create table chat_messages (
+-- Auditable deterministic activity suitability output (Tourist-focused, usable by other roles too)
+create table activity_assessments (
   id bigint generated always as identity primary key,
-  session_id uuid references chat_sessions(id) on delete cascade,
-  role text check (role in ('user','assistant')) not null,
-  content text not null,
-  tool_calls jsonb,
+  user_id uuid references profiles(id),
+  activity text,
+  suitability text check (suitability in ('low','moderate','high','unsuitable')),
+  factors jsonb,
   created_at timestamptz default now()
-);
-
-create table chat_message_sources (
-  id bigint generated always as identity primary key,
-  message_id bigint references chat_messages(id) on delete cascade,
-  dataset text not null,
-  reference_time timestamptz
 );
 
 -- RAG knowledge base
 create extension if not exists vector;
-create table knowledge_docs (
+create table documents (
   id bigint generated always as identity primary key,
   title text,
+  source_id bigint references data_sources(id),
+  storage_path text,
+  metadata jsonb default '{}'
+);
+
+create table document_chunks (
+  id bigint generated always as identity primary key,
+  document_id bigint references documents(id) on delete cascade,
   content text not null,
-  embedding vector(1536),
-  category text
+  embedding vector(1536)
+);
+
+-- Feedback & audit trail
+create table feedback (
+  id bigint generated always as identity primary key,
+  message_id bigint references messages(id) on delete cascade,
+  rating int,
+  comment text,
+  created_at timestamptz default now()
+);
+
+create table audit_events (
+  id bigint generated always as identity primary key,
+  user_id uuid references profiles(id),
+  action text not null,
+  metadata jsonb default '{}',
+  created_at timestamptz default now()
 );
 ```
 
-### Row-Level Security (example)
+### 4.1 Role values
+```
+tourist | fisher | authority | researcher | disaster_management | general
+```
+Enforced via the `user_role` Postgres enum above — **never free-form text**.
+
+### 4.2 Tourist RLS rules (from v2 spec §4.3)
+- Tourist can read/update their own editable profile fields.
+- `tourist_preferences` is private to that user.
+- `conversations`, `messages`, `locations`, and activity history (`activity_assessments`) are user-owned (`user_id = auth.uid()`).
+- Public/demo `map_features` layers are readable by anyone; sensitive layers require explicit backend authorization (checked in FastAPI, not just RLS).
+- `audit_events` and `risk_assessments`/`activity_assessments` are **server-generated only** — no client insert/update policy.
+- Privileged database/service credentials never reach the browser (FastAPI holds the service role key server-side only).
+
 ```sql
-alter table saved_locations enable row level security;
-create policy "Users manage own saved locations"
-  on saved_locations for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+alter table tourist_preferences enable row level security;
+create policy "own tourist prefs" on tourist_preferences
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-alter table chat_sessions enable row level security;
-create policy "Users access own chat sessions"
-  on chat_sessions for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+alter table conversations enable row level security;
+create policy "own conversations" on conversations
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- Public-read reference data
-alter table alerts enable row level security;
-create policy "Public read alerts" on alerts for select using (true);
+alter table locations enable row level security;
+create policy "own locations" on locations
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+alter table map_features enable row level security;
+create policy "public read map features" on map_features for select using (true);
+-- sensitive feature_type values are filtered in FastAPI's query layer, not here
+
+alter table risk_assessments enable row level security;
+alter table activity_assessments enable row level security;
+alter table audit_events enable row level security;
+-- no insert/update policies for the above three — writes go through the
+-- FastAPI service role only
 ```
 
-## 5. API Design (Next.js route handlers)
+### 4.3 Tourist evaluation set (golden queries — from v2 spec §4.4)
+```json
+[
+  {"query": "Is it a good time to visit the beach tomorrow morning?",
+   "role": "tourist", "activity": "beach_visit",
+   "expected_tools": ["weather", "ocean", "advisory", "gis"]},
+  {"query": "Can I go boating this weekend?",
+   "role": "tourist", "activity": "boating",
+   "expected_tools": ["weather", "ocean", "advisory", "gis"]},
+  {"query": "Show me more suitable places for sightseeing nearby.",
+   "role": "tourist", "activity": "sightseeing",
+   "expected_tools": ["weather", "gis"]},
+  {"query": "Why is boating unsuitable?",
+   "role": "tourist", "activity": "boating",
+   "expected_tools": ["risk_context"]}
+]
+```
+Run this set (plus role-equivalent sets for Fisher/Authority/Researcher/Disaster
+Management/General) via `pytest` after every phase — see `06_Phasewise_Vibecoding_Prompts.md`
+for exactly when.
+
+## 5. New Tourist-Specific UI Components (v2 addition — extend existing Monitor/Chat, don't rebuild)
+
+The already-built Tourist widget (Beach Safety Guide, nearby beaches list,
+do's/don'ts) is a good starting point. The v2 spec asks to **extend** it with:
+
+| Component | Purpose |
+|---|---|
+| **Activity selector** | Beach Visit / Boating / Sightseeing / Water Recreation — shown on first Tourist login (alongside/after role selection) and editable later in Profile |
+| **Location selector** | Current / saved / search location |
+| **Time selector** | Now / today / tomorrow / custom |
+| **Suitability card** | Score + LOW / MODERATE / HIGH / UNSUITABLE label |
+| **Condition cards** | Wind, waves, rain/storm, and other relevant metrics |
+| **Warnings** | Official/advisory info with timestamp, visually prominent |
+| **Map** | Nearby places, suitability overlay, zones, risk (extends the existing Monitor map) |
+| **Why? panel** | The deterministic factors behind the suitability result — this is what makes the Risk/Suitability Engine's output explainable, not a black box |
+| **Sources** | Evidence + retrieval time, always shown for live-data claims |
+
+**Tourist language guidelines (apply to all copy in these components):**
+- Say "more suitable based on available conditions," never guarantee safety.
+- Surface official warnings prominently, above ORCA's own framing.
+- If data is missing, say what's missing — don't silently omit it.
+- Keep the main answer simple; put technical detail in the Why/Evidence panel.
+- Never imply ORCA replaces lifeguards, authorities, or official warnings.
+
+## 6. API Design (FastAPI routes — replaces earlier Next.js API route design)
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/api/chat` | POST | Send message → returns streamed agent response + sources |
-| `/api/map-layers?type=sst\|chlorophyll\|pfz\|alerts&bbox=...&date=...` | GET | Fetch layer data for current viewport |
-| `/api/alerts?region=...` | GET | Active alerts for a region |
-| `/api/alerts/subscribe` | POST | Create/update notification subscription |
-| `/api/export?dataset=...&format=csv\|geojson&range=...` | GET | Researcher data export (signed URL) |
-| `/api/locations` | GET/POST/DELETE | Manage saved locations |
-| `/api/profile` | GET/PATCH | Role, language, home region |
+| `/chat` | POST (streamed) | Send message → runs the LangGraph agent system → streamed response + sources + which agents ran |
+| `/map-layers?type=...&bbox=...&date=...` | GET | Fetch `observations`/`map_features` for current viewport |
+| `/activity` | GET/PATCH | Tourist activity selection (`tourist_preferences`) |
+| `/alerts?region=...` | GET | Active alert-worthy `risk_assessments` for a region |
+| `/export?dataset=...&format=csv\|geojson&range=...` | GET | Researcher data export (signed URL via Supabase Storage) |
+| `/locations` | GET/POST/DELETE | Manage saved locations |
+| `/profile` | GET/PATCH | Role (read-only after first set), language, home region |
+| `/feedback` | POST | Message rating/comment |
 
-## 6. Agent Tool Contracts (for the LLM's tool-calling)
+All routes require a verified Supabase JWT (FastAPI dependency) and derive
+`user_id`/role server-side — no route accepts a client-supplied role.
+
+## 7. Agent Tool Contracts (per-agent, for LangGraph tool-calling)
+
 ```json
 {
   "name": "get_sst",
@@ -384,8 +505,19 @@ create policy "Public read alerts" on alerts for select using (true);
   "parameters": {"lat": "number", "lon": "number", "radius_km": "number", "date": "string"}
 }
 ```
-Similarly define `get_chlorophyll`, `get_weather`, `get_pfz`, `get_active_alerts`, `rag_search(query, category)`, `export_dataset(dataset, filters)`. Keep each tool's output schema strict JSON so the LLM can reliably format UI widgets (chart data, badge level, map highlight geometry).
 
-## 7. Accessibility & Localization
-- WCAG AA color contrast for alert badges (don't rely on color alone — add icon/text label too, since color-blind users must distinguish severity).
-- All persona-facing copy externalized for `next-intl` translation.
+| Agent | Tools |
+|---|---|
+| Weather Agent | `get_weather`, `get_cyclone_track` |
+| Ocean Agent | `get_sst`, `get_chlorophyll`, `get_pfz` |
+| GIS Agent | `get_nearby_features`, `intersect_zone`, `get_bbox_features` |
+| Advisory/RAG Agent | `rag_search(query, category)` |
+| (Risk/Suitability, Recommendation) | Consume prior results directly from graph state — no external tools of their own |
+
+Keep each tool's output schema strict JSON (Pydantic-validated) so downstream
+agents and the frontend can reliably render structured widgets (chart data,
+badge level, map highlight geometry) from it.
+
+## 8. Accessibility & Localization
+- WCAG AA color contrast for alert/suitability badges (icon/text label alongside color, not color alone).
+- All persona-facing copy externalized for `next-intl` translation; backend localization rolls out English → Hindi → Marathi first (v2 Phase 4), Gujarati/Odia/Tamil after (UI already supports all six).

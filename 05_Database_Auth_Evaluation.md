@@ -1,15 +1,22 @@
 # Database & Auth Evaluation — ORCA
 
+> **v2 revision note:** schema references updated to the normalized v2 design
+> (`observations`, `data_sources`, `map_features`, `risk_assessments`,
+> `activity_assessments`, `documents`/`document_chunks`, `feedback`,
+> `audit_events`) and the 6-role enum. The Supabase-vs-alternatives
+> evaluation and recommendation below are unchanged — this pivot doesn't
+> affect the database choice, only what's built on top of it.
+
 ## 1. Requirements Recap
 ORCA needs to store/query:
 1. **Geospatial data** — points (SST/chlorophyll readings), polygons (PFZ zones, alert areas), with radius/bbox/time-range queries.
 2. **Time-series** — daily/hourly readings, trend queries over date ranges.
 3. **Vector embeddings** — for RAG (safety guidelines, regulations knowledge base).
-4. **Relational/user data** — profiles, roles, saved locations, subscriptions, chat history.
-5. **Realtime push** — new alerts should reach connected clients without polling.
-6. **Auth** — email/OAuth login, role-based access, row-level security per user.
-7. **File storage** — exported datasets (CSV/GeoJSON) for Researcher persona.
-8. **Fast hackathon setup** — small team, limited time, need managed infra not custom ops.
+4. **Relational/user data** — profiles (role, locked once set), tourist_preferences, conversations/messages, locations, feedback, audit_events.
+5. **Realtime push** — new risk/alert conditions should reach connected clients without polling.
+6. **Auth** — email/OAuth login, **server-derived** role-based access (never trusting a client-sent role), row-level security per user.
+7. **File storage** — exported datasets (CSV/GeoJSON) for Researcher role, RAG source documents.
+8. **Fast hackathon setup, but built to continue post-hackathon** — small team now, but this needs to remain maintainable as a real service.
 
 ## 2. Supabase Evaluation
 
@@ -49,16 +56,16 @@ ORCA needs to store/query:
 
 ## 3. Auth Design with Supabase
 - **Methods:** Email/password + Google OAuth (fast login for demo).
-- **Role assignment:** `profiles.role` set via a role-selection modal on first login, or changed anytime via a header dropdown — no dedicated onboarding flow in the current trimmed build (see `04_Design_Document.md` §0.1 and §2.1).
-- **RLS pattern:** `auth.uid() = user_id` on all personal tables; public-read on reference/alert tables; service-role key (server-only, never exposed to client) used by the ingestion pipeline to write oceanographic data.
-- **Session handling:** Supabase JS client manages JWT refresh automatically in the Next.js app via `@supabase/ssr` helpers (cookie-based sessions, works cleanly with Next.js App Router server components).
-- **Role-in-JWT (optional optimization):** a Postgres trigger/function can copy `role` into the JWT's custom claims on login so RLS policies and the agent's persona-formatting logic can both read it without an extra query.
+- **Role assignment:** `profiles.role` (constrained enum: `tourist, fisher, authority, researcher, disaster_management, general`) set once via a role-selection modal on first login, then **locked** — no in-app way to change it afterward. **FastAPI is the enforcement point:** it derives role server-side from `profiles` on every request and never trusts a role sent by the client (see `03_System_Architecture.md` §4). For demos, use separate seeded accounts per role (see `06_Phasewise_Vibecoding_Prompts.md` Phase 1).
+- **RLS pattern:** `auth.uid() = user_id` on all personal tables (`tourist_preferences`, `conversations`, `messages`, `locations`); public-read on `map_features`; `risk_assessments`/`activity_assessments`/`audit_events` have no client write policy at all — only FastAPI's service role can insert them.
+- **Session handling:** Supabase JS client manages JWT refresh in the Next.js frontend via `@supabase/ssr`; the resulting JWT is sent as a Bearer token to FastAPI on every request.
+- **Role-in-JWT (optional optimization, still safe under the "never trust client role" rule):** a Postgres trigger can copy `role` into the JWT's custom claims on login. This remains safe because the JWT is cryptographically signed by Supabase — a client can't forge or edit it — unlike a `role` field submitted in a request body, which FastAPI must never read as authoritative.
 
-## 4. Setup Checklist (Phase 0 of build)
+## 4. Setup Checklist
 1. Create Supabase project.
 2. Enable extensions: `postgis`, `vector`.
-3. Run schema migration (see `04_Design_Document.md` §4).
+3. Run schema migration (see `04_Design_Document.md` §4 — v2 normalized schema).
 4. Configure Auth providers (email + Google).
-5. Set up RLS policies.
-6. Generate TypeScript types (`supabase gen types typescript`) for use across the Next.js app.
-7. Store `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` as env vars (service key server-side only).
+5. Set up RLS policies (§4.2 in Design Doc).
+6. Generate SQLAlchemy models / Pydantic schemas in the FastAPI service matching the schema (mirrors what `supabase gen types typescript` would do for a TS backend — here it's Python-side).
+7. Store `SUPABASE_URL`, `SUPABASE_ANON_KEY` in the **frontend's** env (`NEXT_PUBLIC_*`); store `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET` in the **FastAPI backend's** env only — the service role key and JWT secret must never reach the browser.

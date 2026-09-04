@@ -8,7 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 export default function SignupPage() {
   const router = useRouter();
-  const { signup, isLoggedIn } = useAuth();
+  const { signup, loginWithGoogle, isLoggedIn } = useAuth();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -24,7 +24,7 @@ export default function SignupPage() {
     }
   }, [isLoggedIn, router]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -49,18 +49,20 @@ export default function SignupPage() {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      signup(email, name);
+    const result = await signup(email, password, name);
+    setIsSubmitting(false);
+
+    if (result.success) {
       router.push("/monitor");
-    }, 600);
+    } else {
+      setError(result.error || "Signup failed. Please try again.");
+    }
   };
 
-  const handleGoogleSignup = () => {
+  const handleGoogleSignup = async () => {
     setIsSubmitting(true);
-    setTimeout(() => {
-      signup("officer.google@isro.gov.in", "ISRO Officer");
-      router.push("/monitor");
-    }, 600);
+    await loginWithGoogle();
+    setIsSubmitting(false);
   };
 
   return (

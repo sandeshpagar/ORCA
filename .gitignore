@@ -7,10 +7,16 @@ node_modules/
 
 # Environment variables
 .env
+.env.*
+.env*.local
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+*.env
+!.env.example
+!.env.local.example
+!services/api/.env.example
 
 # Logs
 npm-debug.log*
@@ -20,3 +26,20 @@ pnpm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Python & SQLite
+*.db
+*.sqlite3
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+services/api/.venv/
+services/api/orca_local.db
+services/api/__pycache__/
+services/api/app/__pycache__/
+services/api/tests/__pycache__/
+.pytest_cache/
+

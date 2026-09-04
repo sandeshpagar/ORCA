@@ -6,49 +6,70 @@ import { useAuth, UserRole } from "@/contexts/AuthContext";
 
 const rolesList: { id: UserRole; title: string; desc: string; icon: string }[] = [
   {
-    id: "fisherman",
-    title: "Fisherman",
-    desc: "Fishing zone & sail-safety guidance",
-    icon: "sailing",
+    id: "tourist",
+    title: "Tourist",
+    desc: "Beach safety, swimming windows & travel advisories in plain language",
+    icon: "beach_access",
   },
   {
-    id: "researcher",
-    title: "Researcher",
-    desc: "Historical data, trends & exports",
-    icon: "query_stats",
+    id: "fisher",
+    title: "Fisher",
+    desc: "Potential Fishing Zone (PFZ) boundaries & sail-safety guidance",
+    icon: "sailing",
   },
   {
     id: "authority",
     title: "Coastal Authority",
-    desc: "Real-time alerts & risk dashboards",
+    desc: "Maritime security, port monitoring & coastal surveillance",
     icon: "shield",
   },
   {
-    id: "tourist",
-    title: "Tourist",
-    desc: "Beach safety & travel advisories in plain language",
-    icon: "beach_access",
+    id: "researcher",
+    title: "Researcher",
+    desc: "Historical data, ocean trends & analytical exports",
+    icon: "query_stats",
   },
   {
-    id: "operator",
-    title: "Maritime Operator",
-    desc: "Route safety & port conditions",
-    icon: "directions_boat",
+    id: "disaster_management",
+    title: "Disaster Management",
+    desc: "Real-time alerts, crisis command & risk dashboards",
+    icon: "emergency",
+  },
+  {
+    id: "general",
+    title: "General Public",
+    desc: "Public marine weather awareness & educational intelligence",
+    icon: "public",
   },
 ];
 
-const languagesList = ["English", "Hindi (हिंदी)", "Odia (ଓଡ଼ିଆ)", "Tamil (தமிழ்)"];
+const touristActivitiesList = [
+  { id: "beach_visit", label: "Beach Visit", icon: "beach_access" },
+  { id: "boating", label: "Boating", icon: "directions_boat" },
+  { id: "sightseeing", label: "Sightseeing", icon: "photo_camera" },
+  { id: "water_recreation", label: "Water Recreation", icon: "surfing" },
+];
+
+const languagesList = [
+  "English",
+  "Hindi (हिंदी)",
+  "Marathi (मराठी)",
+  "Gujarati (ગુજરાતી)",
+  "Odia (ଓଡ଼ିଆ)",
+  "Tamil (தமிழ்)",
+];
 
 export default function ProfilePage() {
   const router = useRouter();
   const {
     user,
     role,
-    setRole,
     homeRegion,
     setHomeRegion,
     language,
     setLanguage,
+    touristActivities,
+    saveTouristPreferences,
     logout,
   } = useAuth();
 
@@ -57,6 +78,13 @@ export default function ProfilePage() {
   const [lonInput, setLonInput] = useState(homeRegion.lon.toString());
   const [geoLocating, setGeoLocating] = useState(false);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
+
+  const [selectedActivities, setSelectedActivities] = useState<string[]>(
+    touristActivities.length > 0 ? touristActivities : ["beach_visit", "sightseeing"]
+  );
+
+  const currentRoleDetails =
+    rolesList.find((r) => r.id === role) || rolesList[0];
 
   const handleSaveRegion = () => {
     const lat = parseFloat(latInput) || 19.31;
@@ -95,7 +123,6 @@ export default function ProfilePage() {
       },
       () => {
         setGeoLocating(false);
-        // Fallback demo location (Gopalpur Sector)
         setLatInput("19.3100");
         setLonInput("84.9100");
         setRegionInput("Gopalpur Sector (GPS Fallback)");
@@ -111,8 +138,18 @@ export default function ProfilePage() {
     );
   };
 
-  const handleLogout = () => {
-    logout();
+  const toggleActivity = async (actId: string) => {
+    const next = selectedActivities.includes(actId)
+      ? selectedActivities.filter((a) => a !== actId)
+      : [...selectedActivities, actId];
+    setSelectedActivities(next);
+    await saveTouristPreferences(next, "leisure", language);
+    setSaveFeedback("Tourist activities updated!");
+    setTimeout(() => setSaveFeedback(null), 2000);
+  };
+
+  const handleLogout = async () => {
+    await logout();
     router.replace("/login");
   };
 
@@ -128,14 +165,14 @@ export default function ProfilePage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-headline-md text-headline-md text-primary font-bold">
-                  {user?.name || "Officer Sandeep"}
+                  {user?.name || "Officer"}
                 </h1>
                 <span className="font-label-sm text-[11px] px-2 py-0.5 rounded-full bg-secondary text-on-secondary font-mono uppercase font-bold">
                   ACTIVE
                 </span>
               </div>
               <p className="font-body-sm text-body-sm text-on-surface-variant font-mono mt-0.5">
-                {user?.email || "commander@isro.gov.in"}
+                {user?.email || "officer@isro.gov.in"}
               </p>
             </div>
           </div>
@@ -143,7 +180,7 @@ export default function ProfilePage() {
             onClick={handleLogout}
             type="button"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-error-container text-on-error-container hover:bg-error hover:text-on-error text-label-sm font-semibold transition-all border border-error/20"
-            title="Sign out of current mock session"
+            title="Sign out of current session"
           >
             <span className="material-symbols-outlined text-[16px]">logout</span>
             <span className="hidden sm:inline">Sign Out</span>
@@ -160,7 +197,7 @@ export default function ProfilePage() {
           </div>
         )}
 
-        {/* Section 1: Active Role Configuration */}
+        {/* Section 1: Assigned Operational Role (Read-Only) */}
         <div className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm border border-surface-container flex flex-col gap-space-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -171,49 +208,96 @@ export default function ProfilePage() {
                 Assigned Operational Role
               </h2>
             </div>
-            <span className="font-label-sm text-[11px] text-on-surface-variant">
-              Controls Monitor dashboard widgets
+            <span className="font-label-sm text-[11px] px-2.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-mono uppercase font-semibold">
+              Permanent
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-            {rolesList.map((item) => {
-              const isSelected = role === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setRole(item.id)}
-                  type="button"
-                  className={`p-3 rounded-xl text-left flex items-start gap-3 transition-all border ${
-                    isSelected
-                      ? "bg-secondary-container/30 border-secondary ring-2 ring-secondary/30 shadow-sm"
-                      : "bg-surface-container-low border-surface-container hover:bg-surface-container"
-                  }`}
-                >
-                  <div
-                    className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                      isSelected
-                        ? "bg-secondary text-on-secondary"
-                        : "bg-primary-container text-on-primary"
-                    }`}
-                  >
-                    <span className="material-symbols-outlined text-[20px]">
-                      {item.icon}
-                    </span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="font-headline-sm text-[14px] text-primary font-bold block">
-                      {item.title}
-                    </span>
-                    <span className="text-[11px] text-on-surface-variant line-clamp-1 block mt-0.5">
-                      {item.desc}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
+          <div className="p-4 rounded-xl bg-surface-container-low border border-surface-container flex items-start gap-3.5">
+            <div className="w-12 h-12 rounded-xl bg-primary text-on-primary flex items-center justify-center shrink-0 shadow-sm">
+              <span className="material-symbols-outlined text-[26px]">
+                {currentRoleDetails.icon}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-headline-sm text-[16px] text-primary font-bold capitalize">
+                  {currentRoleDetails.title}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold bg-secondary text-on-secondary uppercase">
+                  {role}
+                </span>
+              </div>
+              <p className="font-body-sm text-body-sm text-on-surface-variant mt-1 leading-snug">
+                {currentRoleDetails.desc}
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-surface-container flex items-center gap-1.5 text-[11px] text-on-surface-variant">
+                <span className="material-symbols-outlined text-[15px] text-secondary">
+                  lock
+                </span>
+                <span>
+                  Your role determines what data and features are available to you. Operational roles are permanently locked to preserve data governance.
+                </span>
+              </div>
+            </div>
           </div>
         </div>
+
+        {/* Section 1b: Tourist Personalization (Rendered when role is tourist) */}
+        {role === "tourist" && (
+          <div className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm border border-surface-container flex flex-col gap-space-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary text-[22px]">
+                  surfing
+                </span>
+                <h2 className="font-headline-sm text-headline-sm text-primary font-bold">
+                  Tourist Activity Preferences
+                </h2>
+              </div>
+              <span className="font-label-sm text-[11px] text-on-surface-variant">
+                Stored in tourist_preferences
+              </span>
+            </div>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              Tailors safety score badges on beach recreation cards.
+            </p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+              {touristActivitiesList.map((act) => {
+                const isSelected = selectedActivities.includes(act.id);
+                return (
+                  <button
+                    key={act.id}
+                    type="button"
+                    onClick={() => toggleActivity(act.id)}
+                    className={`p-3 rounded-xl text-center border flex flex-col items-center justify-center gap-1.5 transition-all ${
+                      isSelected
+                        ? "bg-secondary-container/30 border-secondary ring-2 ring-secondary/30"
+                        : "bg-surface-container-low border-surface-container hover:bg-surface-container"
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[24px] text-secondary">
+                      {act.icon}
+                    </span>
+                    <span className="text-[12px] font-semibold text-primary">
+                      {act.label}
+                    </span>
+                    <span
+                      className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                        isSelected
+                          ? "bg-secondary text-on-secondary"
+                          : "bg-surface-container-high text-on-surface-variant"
+                      }`}
+                    >
+                      {isSelected ? "Active" : "Off"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Section 2: Home Region & Geographic Coordinates */}
         <div className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm border border-surface-container flex flex-col gap-space-sm">
@@ -309,7 +393,8 @@ export default function ProfilePage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
             {languagesList.map((lang) => {
-              const isSelected = language.startsWith(lang.split(" ")[0]);
+              const isSelected =
+                language === lang || language.startsWith(lang.split(" ")[0]);
               return (
                 <button
                   key={lang}
@@ -336,9 +421,9 @@ export default function ProfilePage() {
         {/* Section 4: System Provenance & Session Status */}
         <div className="p-space-md rounded-2xl bg-surface-container-low border border-surface-container flex flex-col items-center text-center gap-1.5 font-mono text-[12px] text-on-surface-variant">
           <span className="font-bold text-primary">
-            ORCA Mission Grid v2.4.0 · Local Session Scaffolding
+            ORCA Mission Grid v2.4.0 · Supabase Auth &amp; FastAPI Connected
           </span>
-          <span>Ready for Supabase Auth Integration Phase</span>
+          <span>Phase 1 Architecture Active</span>
         </div>
       </div>
     </div>

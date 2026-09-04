@@ -8,7 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, isLoggedIn } = useAuth();
+  const { login, loginWithGoogle, isLoggedIn } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -22,7 +22,7 @@ export default function LoginPage() {
     }
   }, [isLoggedIn, router]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -37,18 +37,20 @@ export default function LoginPage() {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      login(email, email.split("@")[0]);
+    const result = await login(email, password);
+    setIsSubmitting(false);
+
+    if (result.success) {
       router.push("/monitor");
-    }, 600);
+    } else {
+      setError(result.error || "Login failed. Please check your credentials.");
+    }
   };
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = async () => {
     setIsSubmitting(true);
-    setTimeout(() => {
-      login("officer.google@isro.gov.in", "ISRO Officer");
-      router.push("/monitor");
-    }, 600);
+    await loginWithGoogle();
+    setIsSubmitting(false);
   };
 
   return (
