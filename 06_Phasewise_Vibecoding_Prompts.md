@@ -347,7 +347,7 @@ data explicitly labeled DEMO.
 
 ## Final Pre-Demo Checklist (from v2 spec §7.1)
 - [ ] Tourist role exists in database as a constrained enum value.
-- [ ] Tourist onboarding/profile (role + activity + language + location) works.
+- [ ] Tourist onboarding/profile (role + activity + language + location) woxrks.
 - [ ] Backend derives role from auth on every request — verified, not assumed.
 - [ ] Planner uses role + activity + intent to route correctly.
 - [ ] Tourist recommendation signal priorities work as specified (docs/01_PRD.md §4.2).

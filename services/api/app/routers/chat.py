@@ -31,7 +31,7 @@ async def chat_endpoint(
     """
     lat = payload.latitude if payload.latitude is not None else (current_user.home_region_lat or 19.31)
     lon = payload.longitude if payload.longitude is not None else (current_user.home_region_lon or 84.91)
-    loc_name = current_user.home_region_name or f"Coordinates ({lat:.2f}°N, {lon:.2f}°E)"
+    loc_name = payload.region_name or current_user.home_region_name or f"Coordinates ({lat:.2f}°N, {lon:.2f}°E)"
     conv_id = payload.conversation_id or str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -63,6 +63,8 @@ async def chat_endpoint(
         "sources": [],
         "errors": [],
         "final_response": "",
+        "selected_model": payload.selected_model or "auto",
+        "model_used": "deterministic",
     }
 
     # Execute LangGraph Pipeline
@@ -71,6 +73,7 @@ async def chat_endpoint(
 
     # Extract results
     reply = graph_res.get("final_response") or "ORCA advisory generated."
+    model_used = graph_res.get("model_used") or "deterministic"
     suitability = graph_res.get("activity_suitability")
     risk = graph_res.get("risk_result")
     sources = graph_res.get("sources") or []
@@ -118,6 +121,7 @@ async def chat_endpoint(
             activity_suitability=suitability,
             risk_result=risk,
             sources=sources,
+            model_used="deterministic",
         )
 
     # Extract metrics from specialists
@@ -165,4 +169,5 @@ async def chat_endpoint(
         activity_suitability=suitability,
         risk_result=risk,
         sources=sources,
+        model_used=model_used,
     )

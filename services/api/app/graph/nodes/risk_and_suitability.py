@@ -11,12 +11,20 @@ def risk_and_suitability_node(state: AgentState) -> Dict[str, Any]:
     Deterministic Activity Suitability & Risk Assessment Node:
     Combines outputs from specialist nodes and computes mathematical safety scores.
     """
-    activity = state.get("activity") or "beach_visit"
+    intent = state.get("intent", "suitability_check")
+    activity = state.get("activity")
+
+    # If greeting or conversational query with no specific activity, do not generate synthetic activity evaluation
+    if intent == "greeting" or not activity:
+        return {
+            "activity_suitability": None,
+            "risk_result": None,
+        }
+
     weather = state.get("weather_result")
     ocean = state.get("ocean_result")
     gis = state.get("gis_result")
     advisory = state.get("advisory_result")
-    intent = state.get("intent", "suitability_check")
 
     result = evaluate_activity_suitability(
         activity=activity,

@@ -1,5 +1,6 @@
 from typing import Dict, Any, List
 from app.graph.state import AgentState
+from app.llm.fallback_client import fallback_client
 
 
 def format_tourist_response(state: AgentState) -> str:
@@ -141,19 +142,74 @@ def format_role_response(state: AgentState) -> str:
         )
 
 
+def format_greeting_response(state: AgentState) -> str:
+    """Formats an authoritative, welcoming response for greetings without fake suitability metrics."""
+    role = (state.get("role") or "general").upper()
+    loc = state.get("location") or {}
+    loc_name = loc.get("name", "Indian Coastal Waters")
+    weather = state.get("weather_result") or {}
+    ocean = state.get("ocean_result") or {}
+
+    telemetry_parts = []
+    if weather.get("temperature_c") is not None:
+        telemetry_parts.append(f"🌡️ Temp: {weather['temperature_c']:.1f}°C")
+    if weather.get("wind_speed_kmh") is not None:
+        telemetry_parts.append(f"💨 Wind: {weather['wind_speed_kmh']:.1f} km/h")
+    if ocean.get("wave_height_m") is not None:
+        telemetry_parts.append(f"🌊 Waves: {ocean['wave_height_m']:.1f}m")
+
+    telemetry_summary = " · ".join(telemetry_parts) if telemetry_parts else "Real-time telemetry stream active"
+
+    return (
+        f"### 🌊 ORCA Marine Intelligence Core — {loc_name}\n\n"
+        f"Greetings! I am ORCA, an authoritative coastal safety and oceanographic AI decision-support system.\n\n"
+        f"• **Sector Calibrated**: **{loc_name}** ({telemetry_summary})\n"
+        f"• **Operational Role**: **{role}** (Tailored safety advisories active)\n\n"
+        f"**How can I assist you today? You can ask me:**\n"
+        f"1. *\"Is it safe to visit the beach or swim this afternoon?\"*\n"
+        f"2. *\"What are the current wave heights and swell directions?\"*\n"
+        f"3. *\"Can motorboats or fishing craft venture out safely tonight?\"*\n"
+        f"4. *\"Are there any active rip currents or coastal hazards in this sector?\"*"
+    )
+
+
 async def recommendation_node(state: AgentState) -> Dict[str, Any]:
     """
     Recommendation Specialist Node:
     Synthesizes the final response according to role persona and tourist output structure.
     Strictly forbids inventing fabricated numbers; all metrics originate from specialist nodes.
+    Invokes the resilient LLM engine (OpenRouter/Ollama) with automatic fallback to deterministic output.
     """
+    intent = state.get("intent", "")
     role = state.get("role", "general")
+    selected_model = state.get("selected_model") or "auto"
+    user_query = state.get("user_query") or ""
 
-    if role == "tourist":
-        final_text = format_tourist_response(state)
+    if intent == "greeting":
+        deterministic_text = format_greeting_response(state)
+    elif role == "tourist":
+        deterministic_text = format_tourist_response(state)
     else:
-        final_text = format_role_response(state)
+        deterministic_text = format_role_response(state)
+
+    final_text = deterministic_text
+    model_used = "deterministic"
+
+    if selected_model != "deterministic":
+        synthesized, engine_name = await fallback_client.generate_synthesis(
+            grounded_context=deterministic_text,
+            user_query=user_query,
+            role=role,
+            selected_model=selected_model,
+        )
+        if synthesized:
+            final_text = synthesized
+            model_used = engine_name
+        else:
+            model_used = "deterministic"
 
     return {
         "final_response": final_text,
+        "model_used": model_used,
     }
+

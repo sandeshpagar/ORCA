@@ -24,4 +24,6 @@ class AgentState(TypedDict):
     errors: List[str]
     final_response: str
     selected_tools: Optional[List[str]]
+    selected_model: Optional[str]
+    model_used: Optional[str]
 

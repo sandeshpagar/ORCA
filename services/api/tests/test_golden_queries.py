@@ -50,6 +50,7 @@ def make_initial_state(query_item: dict) -> AgentState:
         "sources": [],
         "errors": [],
         "final_response": "",
+        "selected_model": "deterministic",
     }
 
 

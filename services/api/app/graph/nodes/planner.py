@@ -19,8 +19,30 @@ ROLE_DEFAULT_ROUTING: Dict[str, List[str]] = {
 }
 
 
-def detect_activity_from_query(query: str, current_activity: str | None = None) -> str:
+GREETING_WORDS = {
+    "hi", "high", "hello", "hey", "namaste", "hola", "sup",
+    "good morning", "good evening", "good afternoon", "greetings",
+    "who are you", "what can you do", "help", "help me", "start",
+}
+
+
+def is_greeting(query: str) -> bool:
+    q = query.strip().lower()
+    cleaned = "".join(ch for ch in q if ch.isalnum() or ch.isspace()).strip()
+    if cleaned in GREETING_WORDS:
+        return True
+    if any(cleaned.startswith(k) for k in ["who are you", "what can you do", "what are you", "help me"]):
+        return True
+    words = cleaned.split()
+    if len(words) <= 2 and any(w in GREETING_WORDS for w in words):
+        return True
+    return False
+
+
+def detect_activity_from_query(query: str, current_activity: str | None = None) -> str | None:
     """Infers tourist activity from query keywords if not already locked."""
+    if is_greeting(query):
+        return None
     q = query.lower()
     if any(k in q for k in ["sightseeing", "monument", "temple", "lighthouse", "fort", "attractions", "places to see"]):
         return "sightseeing"
@@ -32,11 +54,13 @@ def detect_activity_from_query(query: str, current_activity: str | None = None) 
         return "water_recreation"
     if any(k in q for k in ["beach", "shore", "sand", "coast", "sunbathe", "tide"]):
         return "beach_visit"
-    return current_activity or "beach_visit"
+    return current_activity or None
 
 
 def detect_intent(query: str) -> str:
-    """Detects query intent (suitability check, risk explanation, conditions summary, etc.)."""
+    """Detects query intent (suitability check, risk explanation, conditions summary, greeting, etc.)."""
+    if is_greeting(query):
+        return "greeting"
     q = query.lower()
     if any(k in q for k in ["why is", "why are", "explain why", "reason for unsuitable", "why unsuitable"]):
         return "risk_explanation"
@@ -62,14 +86,17 @@ def plan_query(state: AgentState) -> Dict[str, Any]:
     intent = detect_intent(query)
 
     # Determine required tools/specialists based on routing table
-    if intent == "risk_explanation":
+    if intent == "greeting":
+        required_tools = ["weather", "ocean"]
+    elif intent == "risk_explanation":
         # Explaining an unsuitable condition relies on existing risk context
         required_tools = ["risk_context"]
     elif activity == "sightseeing" or "sightseeing" in query.lower() or "monument" in query.lower():
         # Sightseeing strictly skips ocean across all personas per architecture §2.2
         required_tools = ["weather", "gis"] if "places" in query.lower() else ["weather", "gis", "advisory"]
     elif role == "tourist":
-        required_tools = list(TOURIST_ROUTING.get(activity, ["weather", "ocean", "advisory", "gis"]))
+        act_key = activity or "beach_visit"
+        required_tools = list(TOURIST_ROUTING.get(act_key, ["weather", "ocean", "advisory", "gis"]))
     else:
         required_tools = list(ROLE_DEFAULT_ROUTING.get(role, ["weather", "ocean", "advisory"]))
 

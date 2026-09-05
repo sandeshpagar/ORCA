@@ -50,7 +50,10 @@ async def test_chat_endpoint_schema_with_mocked_live_data(client: AsyncClient, m
         response = await client.post(
             "/chat",
             headers=headers,
-            json={"query": "Can I go swimming at Puri beach this morning?"},
+            json={
+                "query": "Can I go swimming at Puri beach this morning?",
+                "selected_model": "deterministic",
+            },
         )
 
     assert response.status_code == 200
@@ -64,6 +67,7 @@ async def test_chat_endpoint_schema_with_mocked_live_data(client: AsyncClient, m
     assert "user_role" in data
     assert "conversation_id" in data
     assert "created_at" in data
+    assert "model_used" in data
 
     # Check content values
     assert data["safety_verdict"] == "safe"
@@ -104,7 +108,10 @@ async def test_chat_data_honesty_on_external_failure(client: AsyncClient, make_t
         response = await client.post(
             "/chat",
             headers=headers,
-            json={"query": "What is the wave height at Gopalpur?"},
+            json={
+                "query": "What is the wave height at Gopalpur?",
+                "selected_model": "deterministic",
+            },
         )
 
     assert response.status_code == 200

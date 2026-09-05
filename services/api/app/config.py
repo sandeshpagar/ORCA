@@ -62,5 +62,14 @@ class Settings(BaseSettings):
     # Open-Meteo Integration
     OPEN_METEO_TIMEOUT_SECONDS: float = 10.0
 
+    # Resilient LLM Engine (100% Free: OpenRouter Free Models & Offline Ollama)
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    DEFAULT_OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
+
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    DEFAULT_OLLAMA_MODEL: str = "llama3.2"
+    LLM_TIMEOUT_SECONDS: float = 60.0
+
 
 settings = Settings()

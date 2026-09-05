@@ -7,6 +7,12 @@
 > deterministic Risk/Suitability Engine.** New in this revision: scientific
 > processing libs promoted to primary (not just future-proofing), an explicit
 > evals layer, and a documented LLM-boundary principle.
+>
+> **Zero-cost revision note:** §5 now specifies a **layered, auto-failover
+> LLM provider strategy** (Groq → Gemini → OpenRouter free, with local Ollama
+> for dev) instead of a paid Claude API default, plus local embeddings —
+> the entire stack runs at **$0** with no manual intervention needed if any
+> single provider's free tier is exhausted mid-use.
 
 ## 1. Guiding principles
 - Frontend is already built and working — Antigravity must **inspect, preserve, and extend it**, never replace it with a starter template.
@@ -59,14 +65,49 @@ FastAPI (Python)
 | Data processing | **Pandas, NumPy, xarray, GeoPandas** | Promoted to primary now (not just future-proofing) — needed from Phase 1 for scientific/geospatial normalization into the `observations` table |
 | Geospatial (future) | **shapely**, and **netCDF4/rasterio** if raw MOSDAC satellite files are added later | Real NetCDF/raster support if you extend beyond public-data substitutes post-hackathon |
 
-## 5. AI / Multi-Agent Layer
+## 5. AI / Multi-Agent Layer — Zero-Cost, Auto-Failover LLM Strategy
+
+> **Zero-cost constraint:** ORCA's multi-agent design means a single chat
+> message can trigger 5-6 LLM calls (Planner + up to 4 specialists +
+> Recommendation), which burns through tight free-tier request budgets fast.
+> The strategy below is layered specifically so no single provider's limit
+> can take the demo down, without spending anything.
+
+### 5.1 Provider tiers
+| Tier | Provider | Why | Free-tier headroom |
+|---|---|---|---|
+| **Primary** | **Groq** (Llama 3.3 70B or similar, tool-calling capable) | Fastest inference (LPU hardware), reliable function-calling, generous free daily caps — best fit for a live judged demo | High (thousands of tokens/min class limits, well above OpenRouter's request-count cap) |
+| **Secondary** (auto-fallback) | **Google Gemini API** (Gemini 2.0 Flash or similar, tool-calling capable) | Mature tool-calling, ~1,500 requests/day free, different infra than Groq so an outage on one is unlikely to hit both simultaneously | ~1,500 req/day |
+| **Tertiary** (auto-fallback) | **OpenRouter free models** (`:free` suffix, or the `openrouter/free` auto-router) | Last-resort backstop only — free tier is **50 requests/day unfunded, 1,000/day after a one-time non-expiring $10 top-up**, capped at **20 requests/minute** either way; free models also rotate out without notice, so pin a specific tested model ID and monitor for delisting | 50-1,000/day (tightest of the three — do not use as primary given 5-6 calls/query) |
+| **Offline/dev fallback** (not part of live-demo failover chain) | **Local model via Ollama** (Llama 3.1/3.3 8B, Mistral-Nemo, or another explicitly tool-calling-tuned model) | Zero API calls at all, unlimited, works with no internet — ideal for day-to-day development and golden-query test runs so you never burn hosted free-tier quota while iterating | Unlimited (hardware-bound, not request-bound) |
+
+### 5.2 Automatic failover (not manual env-var switching)
+Provider selection must be **runtime, automatic, and transparent to the agent
+code** — not something a person has to notice and fix by hand mid-demo:
+
+1. Configure an **ordered provider chain** in FastAPI, e.g.:
+   ```
+   LLM_PROVIDER_CHAIN=groq,gemini,openrouter
+   GROQ_API_KEY=...
+   GEMINI_API_KEY=...
+   OPENROUTER_API_KEY=...
+   OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct:free   # pin, don't rely on auto-router alone
+   OLLAMA_BASE_URL=http://localhost:11434                    # dev-only, not in the live chain
+   ```
+2. Wrap every LLM call (each agent node) in a **single shared client function** (e.g. `services/api/app/agents/llm_client.py`) that:
+   - Tries the first provider in `LLM_PROVIDER_CHAIN`.
+   - On a rate-limit response (HTTP 429), a quota-exhausted error, or a timeout, **immediately retries the same request against the next provider in the chain** — no manual intervention, no dropped user message.
+   - Logs which provider actually served each request (to `audit_events`, per the Design Doc's audit trail) so you can see after the fact whether/when a fallback fired — useful both for debugging and as a talking point with judges about resilience.
+   - Only surfaces an error to the user if **every** provider in the chain fails — and even then, per the project's existing failure strategy (`03_System_Architecture.md` §5), that surfaces as an honest "temporarily unable to reach the reasoning service" message, never a fabricated answer.
+3. Because all three hosted providers (Groq, Gemini, OpenRouter) expose an OpenAI-compatible or LangChain-supported interface, this failover wrapper is a thin abstraction — LangGraph's model binding doesn't need to know which provider actually answered.
+
+### 5.3 Other components
 | Component | Choice |
 |---|---|
-| LLM | **Claude API (Anthropic Python SDK)** by default — simplest, no infra to manage, best quality for a judged demo. *Optional:* a local/open model (e.g. via Ollama) can be swapped in for cost-free early development, since LangGraph's tool-calling pattern is largely model-agnostic — not required unless you want to avoid API costs during heavy iteration. |
 | Agent orchestration | **LangGraph (Python)** — fits the Planner → {Weather, Ocean, GIS} → Advisory/RAG → Suitability/Risk → Recommendation graph topology directly |
 | Agents | Planner, Weather, Ocean, GIS, Advisory/RAG, Recommendation — see `03_System_Architecture.md` §2 |
-| Risk/Suitability Engine | Deterministic Python module — **not** an LLM call |
-| RAG embeddings | Anthropic/OpenAI/Voyage embeddings (Python SDKs) → `pgvector` |
+| Risk/Suitability Engine | Deterministic Python module — **not** an LLM call, so it's unaffected by any LLM provider's availability |
+| RAG embeddings | **Local embeddings via `sentence-transformers`** (e.g. `all-MiniLM-L6-v2`), run inside FastAPI — zero API calls, no rate limits, no dependency on any of the above providers being up |
 
 ## 6. Database & Auth
 | Layer | Choice | Why |
@@ -140,3 +181,4 @@ orca/
 - **Deterministic Risk/Suitability Engine** keeps the safety-critical judgment auditable and reproducible — a hard requirement for a disaster-management-themed PS, and a metric judges can literally test (100% reproducibility target).
 - **Data-source registry + LIVE/CACHED/DEMO labeling** means the demo never has to pretend fallback data is real — it's honest by construction, which reads well to judges and is the right engineering practice regardless.
 - **Split frontend/backend** lets you keep developing the agent system and data pipeline independently after the hackathon, without touching the UI.
+- **Layered LLM failover (§5.2)** applies the exact same honesty/resilience philosophy as the data-source strategy above, to the model layer itself — the whole system runs at genuine $0 cost with no single point of failure a judge could accidentally trigger by asking one too many questions.

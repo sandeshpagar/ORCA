@@ -8,6 +8,8 @@ class ChatRequest(BaseModel):
     latitude: Optional[float] = Field(default=None, description="Optional target latitude")
     longitude: Optional[float] = Field(default=None, description="Optional target longitude")
     conversation_id: Optional[str] = Field(default=None, description="Existing conversation ID")
+    selected_model: Optional[str] = Field(default="auto", description="Selected AI model ID: 'auto', 'openrouter/llama-3.3-70b', 'openrouter/gemini-2.0-flash', 'openrouter/qwen-2.5-72b', 'ollama/local', or 'deterministic'")
+    region_name: Optional[str] = Field(default=None, description="Target coastal region or sector name (e.g. 'Goa Coastal Sector')")
 
 
 class DataSourceInfo(BaseModel):
@@ -41,4 +43,6 @@ class ChatResponse(BaseModel):
     activity_suitability: Optional[Dict[str, Any]] = Field(default=None, description="Deterministic activity suitability assessment")
     risk_result: Optional[Dict[str, Any]] = Field(default=None, description="Deterministic coastal risk scoring")
     sources: Optional[list[Dict[str, Any]]] = Field(default=None, description="Complete provenance list of all invoked sources")
+    model_used: Optional[str] = Field(default="deterministic", description="Model engine that produced the final narrative")
+
 
