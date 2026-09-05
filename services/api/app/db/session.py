@@ -40,6 +40,10 @@ async def init_db():
                 session.add(DataSource(name=name, type=src_type, reliability=rel))
         await session.commit()
 
+        # Seed demo map features
+        from app.routers.maps import ensure_demo_features_seeded
+        await ensure_demo_features_seeded(session)
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency that provides an async database session."""

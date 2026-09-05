@@ -36,6 +36,17 @@ export default function AppLayout({
     }
   }, [isLoading, isLoggedIn, router]);
 
+  // Prevent browser-level pinch zoom (Ctrl + mousewheel / touchpad pinch) from scoping out UI
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => window.removeEventListener("wheel", handleWheel);
+  }, []);
+
   // Loading spinner during auth hydration
   if (isLoading) {
     return (
@@ -61,14 +72,16 @@ export default function AppLayout({
     return null;
   }
 
+  const isMonitorPage = pathname.startsWith("/monitor");
+
   return (
-    <div className="flex flex-col min-h-screen bg-surface">
+    <div className="flex flex-col h-screen h-[100dvh] w-full overflow-hidden bg-surface select-none">
       {/* Role Selection Modal (triggered on first login / signup only) */}
       <RoleSelectionModal />
 
-      {/* Institutional Global Header */}
-      <header className="fixed top-0 w-full z-50 pt-safe bg-surface/85 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] border-b border-surface-container">
-        <div className="h-16 px-margin-mobile md:px-margin-desktop flex items-center justify-between max-w-7xl mx-auto w-full">
+      {/* Institutional Global Header - Permanent flex-top bar that cannot detach or scroll off */}
+      <header className="h-16 shrink-0 w-full z-50 pt-safe bg-surface/95 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] border-b border-surface-container">
+        <div className="h-full px-margin-mobile md:px-margin-desktop flex items-center justify-between max-w-7xl mx-auto w-full">
           {/* Left: Branding & Satellite status */}
           <Link href="/monitor" className="flex items-center gap-space-sm min-w-0 group">
             <div className="h-9 w-9 relative shrink-0 rounded-xl overflow-hidden shadow-sm">
@@ -149,17 +162,23 @@ export default function AppLayout({
         </div>
       </header>
 
-      {/* Main Page Content */}
-      <main className="flex-1 flex flex-col relative w-full pt-16 pb-16 md:pb-6">
+      {/* Main Page Content - Automatically fills remaining height between Header and Nav */}
+      <main
+        className={`flex-1 min-h-0 relative w-full ${
+          isMonitorPage
+            ? "overflow-hidden"
+            : "overflow-y-auto pb-20 md:pb-6"
+        }`}
+      >
         {children}
       </main>
 
       {/* Mobile Fixed Bottom Navigation (Monitor, AI Chat, Alerts) */}
       <nav
-        className="md:hidden fixed bottom-0 w-full z-50 pb-safe bg-surface/90 backdrop-blur-xl shadow-[0_-2px_10px_rgba(0,0,0,0.04)] border-t border-surface-container"
+        className="md:hidden h-16 shrink-0 w-full z-50 pb-safe bg-surface/95 backdrop-blur-xl shadow-[0_-2px_10px_rgba(0,0,0,0.04)] border-t border-surface-container"
         data-active-classes="text-primary font-semibold"
       >
-        <div className="flex justify-around items-center h-16 px-space-xs">
+        <div className="flex justify-around items-center h-full px-space-xs">
           {navItems.map((item) => {
             const isActive = pathname.startsWith(item.href);
             return (

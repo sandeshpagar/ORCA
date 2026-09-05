@@ -108,3 +108,18 @@ class Message(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class MapFeature(Base):
+    __tablename__ = "map_features"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    feature_type = Column(String(64), nullable=False, index=True)  # beach, poi, protected_area, restricted_area, activity_zone, risk_zone
+    name = Column(String(255), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    geometry = Column(JSON, nullable=True)  # GeoJSON representation: Point, Polygon, etc.
+    properties = Column(JSON, default=dict)
+    reliability = Column(SQLEnum(ReliabilityMode), nullable=False, default=ReliabilityMode.DEMO)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+

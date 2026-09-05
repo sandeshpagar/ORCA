@@ -96,3 +96,49 @@ def require_role(allowed_roles: List[UserRoleEnum]):
         return current_user
 
     return role_checker
+
+
+async def get_current_user_and_role(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> tuple[str, str]:
+    """Convenience dependency returning (user_id, role_string)."""
+    role_str = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    return current_user.user_id, role_str
+
+
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def get_optional_user_and_role(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_db),
+) -> tuple[str, str]:
+    """
+    Returns (user_id, role) with graceful fallback for public/demo GIS viewport exploration.
+    If valid JWT is supplied, derives authoritative role strictly from DB.
+    If demo token or absent, gracefully defaults to 'tourist' or provided demo role.
+    """
+    if not credentials or not credentials.credentials or credentials.credentials in ["null", "undefined"]:
+        return "demo_guest", UserRoleEnum.TOURIST.value
+
+    token = credentials.credentials
+    valid_roles = {r.value for r in UserRoleEnum}
+    if token in valid_roles:
+        return f"demo_{token}", token
+
+    try:
+        payload = verify_supabase_jwt(token)
+        user_id = payload.get("sub")
+        if user_id:
+            stmt = select(Profile).where(Profile.id == user_id)
+            result = await db.execute(stmt)
+            profile = result.scalar_one_or_none()
+            if profile:
+                role_val = profile.role.value if hasattr(profile.role, "value") else str(profile.role)
+                return profile.id, role_val
+    except Exception:
+        pass
+
+    return "demo_guest", UserRoleEnum.TOURIST.value
+
+

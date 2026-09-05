@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db.session import init_db
-from app.routers import profile, tourist, chat, data_sources
+from app.routers import profile, tourist, chat, data_sources, maps
 
 
 @asynccontextmanager
@@ -41,6 +41,7 @@ app.include_router(chat.router, prefix="/api")  # Also provides POST /api/chat
 app.include_router(profile.router, prefix="/api")
 app.include_router(tourist.router, prefix="/api")
 app.include_router(data_sources.router, prefix="/api")
+app.include_router(maps.router)
 
 
 @app.get("/")
