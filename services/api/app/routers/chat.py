@@ -2,13 +2,25 @@ import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc, func
+import logging
 
 from app.auth.deps import get_current_user, AuthenticatedUser
 from app.db.session import get_db
 from app.db.models import UserRoleEnum, TouristPreference, Conversation, Message
-from app.schemas.chat import ChatRequest, ChatResponse, DataSourceInfo, MarineMetrics
+from app.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    DataSourceInfo,
+    MarineMetrics,
+    ConversationSummary,
+    ConversationDetail,
+    CreateConversationRequest,
+    UpdateConversationRequest,
+)
 from app.graph.builder import get_compiled_graph
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["AI Chat"])
 
@@ -48,7 +60,7 @@ async def chat_endpoint(
     initial_state = {
         "user_id": current_user.user_id,
         "role": current_user.role.value,
-        "language": current_user.language or "en",
+        "language": payload.language or current_user.language or "en",
         "activity": user_activity,
         "user_query": payload.query,
         "location": {"name": loc_name, "latitude": lat, "longitude": lon},
@@ -155,13 +167,71 @@ async def chat_endpoint(
         attribution="Open-Meteo, Survey of India NSDI, and IMD Coastal Advisories",
     )
 
+    # Persist Conversation and Messages to DB with graceful fallback
+    try:
+        conv_stmt = select(Conversation).where(Conversation.id == conv_id)
+        conv_res = await db.execute(conv_stmt)
+        conv = conv_res.scalar_one_or_none()
+        if not conv:
+            first_line = payload.query.strip().split("\n")[0]
+            title = (first_line[:40] + "...") if len(first_line) > 40 else first_line
+            conv = Conversation(
+                id=conv_id,
+                user_id=current_user.user_id if current_user else None,
+                title=title or "Marine Advisory",
+            )
+            db.add(conv)
+            await db.flush()
+
+        # Add user message
+        user_msg = Message(
+            conversation_id=conv_id,
+            role="user",
+            content=payload.query,
+            metadata_json={
+                "region_name": loc_name,
+                "latitude": lat,
+                "longitude": lon,
+                "selected_model": payload.selected_model or "auto",
+            },
+        )
+        db.add(user_msg)
+
+        # Add assistant message
+        asst_msg = Message(
+            conversation_id=conv_id,
+            role="assistant",
+            content=reply,
+            metadata_json={
+                "metrics": metrics.model_dump() if metrics else None,
+                "data_source": primary_source.model_dump() if primary_source else None,
+                "safety_verdict": verdict,
+                "active_nodes": active_nodes,
+                "activity_suitability": suitability,
+                "risk_result": risk,
+                "sources": sources,
+                "model_used": model_used,
+                "is_live": weather_dict.get("is_live", True) if weather_dict else False,
+            },
+        )
+        db.add(asst_msg)
+        await db.commit()
+    except Exception as persist_err:
+        logger.warning(f"Could not persist chat message to database: {persist_err}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    resolved_loc = graph_res.get("location") or {"name": loc_name, "latitude": lat, "longitude": lon}
+
     return ChatResponse(
         reply=reply,
         data_source=primary_source,
         metrics=metrics,
         safety_verdict=verdict,
         user_role=current_user.role.value,
-        location={"name": loc_name, "latitude": lat, "longitude": lon},
+        location=resolved_loc,
         is_live=weather_dict.get("is_live", True),
         conversation_id=conv_id,
         created_at=now_iso,
@@ -171,3 +241,171 @@ async def chat_endpoint(
         sources=sources,
         model_used=model_used,
     )
+
+
+@router.get("/chat/conversations", response_model=list[ConversationSummary])
+@router.get("/api/chat/conversations", response_model=list[ConversationSummary])
+async def list_conversations(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List conversation threads for the active session, sorted by recent activity."""
+    try:
+        stmt = (
+            select(Conversation)
+            .where(
+                (Conversation.user_id == current_user.user_id)
+                | (Conversation.user_id.is_(None))
+            )
+            .order_by(desc(Conversation.created_at))
+            .limit(50)
+        )
+        res = await db.execute(stmt)
+        conversations = res.scalars().all()
+
+        summaries = []
+        for c in conversations:
+            msg_stmt = (
+                select(Message)
+                .where(Message.conversation_id == c.id)
+                .order_by(desc(Message.created_at))
+                .limit(1)
+            )
+            msg_res = await db.execute(msg_stmt)
+            last_msg = msg_res.scalar_one_or_none()
+
+            count_stmt = select(func.count(Message.id)).where(Message.conversation_id == c.id)
+            count_res = await db.execute(count_stmt)
+            count = count_res.scalar() or 0
+
+            summaries.append(
+                ConversationSummary(
+                    id=c.id,
+                    title=c.title or "Marine Advisory Session",
+                    created_at=c.created_at.isoformat() if c.created_at else datetime.now(timezone.utc).isoformat(),
+                    message_count=count,
+                    last_message=last_msg.content[:80] if last_msg else None,
+                )
+            )
+        return summaries
+    except Exception as e:
+        logger.warning(f"Error listing conversations: {e}")
+        return []
+
+
+@router.get("/chat/conversations/{conversation_id}", response_model=ConversationDetail)
+@router.get("/api/chat/conversations/{conversation_id}", response_model=ConversationDetail)
+async def get_conversation(
+    conversation_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve full message history for a specific conversation session."""
+    conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+    res = await db.execute(conv_stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    msg_stmt = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+    )
+    msg_res = await db.execute(msg_stmt)
+    messages = msg_res.scalars().all()
+
+    formatted_messages = []
+    for m in messages:
+        formatted_messages.append({
+            "id": str(m.id),
+            "role": m.role,
+            "content": m.content,
+            "created_at": m.created_at.isoformat() if m.created_at else datetime.now(timezone.utc).isoformat(),
+            "metadata": m.metadata_json or {},
+        })
+
+    return ConversationDetail(
+        id=conv.id,
+        title=conv.title or "Marine Advisory Session",
+        created_at=conv.created_at.isoformat() if conv.created_at else datetime.now(timezone.utc).isoformat(),
+        messages=formatted_messages,
+    )
+
+
+@router.post("/chat/conversations", response_model=ConversationSummary)
+@router.post("/api/chat/conversations", response_model=ConversationSummary)
+async def create_conversation(
+    payload: CreateConversationRequest = CreateConversationRequest(),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new conversation session explicitly."""
+    new_id = str(uuid.uuid4())
+    conv = Conversation(
+        id=new_id,
+        user_id=current_user.user_id if current_user else None,
+        title=payload.title or "New Chat",
+    )
+    db.add(conv)
+    await db.commit()
+    await db.refresh(conv)
+
+    return ConversationSummary(
+        id=conv.id,
+        title=conv.title,
+        created_at=conv.created_at.isoformat() if conv.created_at else datetime.now(timezone.utc).isoformat(),
+        message_count=0,
+        last_message=None,
+    )
+
+
+@router.patch("/chat/conversations/{conversation_id}", response_model=ConversationSummary)
+@router.patch("/api/chat/conversations/{conversation_id}", response_model=ConversationSummary)
+async def update_conversation(
+    conversation_id: str,
+    payload: UpdateConversationRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a conversation title."""
+    conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+    res = await db.execute(conv_stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conv.title = payload.title.strip()
+    await db.commit()
+    await db.refresh(conv)
+
+    count_stmt = select(func.count(Message.id)).where(Message.conversation_id == conv.id)
+    count_res = await db.execute(count_stmt)
+    count = count_res.scalar() or 0
+
+    return ConversationSummary(
+        id=conv.id,
+        title=conv.title,
+        created_at=conv.created_at.isoformat() if conv.created_at else datetime.now(timezone.utc).isoformat(),
+        message_count=count,
+        last_message=None,
+    )
+
+
+@router.delete("/chat/conversations/{conversation_id}")
+@router.delete("/api/chat/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a conversation session and cascade-delete its messages."""
+    conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+    res = await db.execute(conv_stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    await db.delete(conv)
+    await db.commit()
+    return {"status": "deleted", "id": conversation_id}

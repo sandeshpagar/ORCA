@@ -154,6 +154,7 @@ class FallbackLLMClient:
         user_query: str,
         role: str = "tourist",
         selected_model: str = "auto",
+        language: str = "en",
     ) -> Tuple[Optional[str], str]:
         """
         Synthesizes natural language advisory using the selected model or resilient auto-fallback.
@@ -166,6 +167,25 @@ class FallbackLLMClient:
         if sel in ["deterministic", "none", "rule_engine"]:
             return None, "deterministic"
 
+        lang_directive = ""
+        target_lang_name = "English"
+        if language == "hi":
+            target_lang_name = "Hindi (हिंदी)"
+            lang_directive = (
+                "\nMANDATORY MULTILINGUAL INSTRUCTION:\n"
+                "- You MUST synthesize and write the ENTIRE response in Hindi (हिंदी).\n"
+                "- Translate all safety advice, operational summaries, and oceanographic explanations into fluent Hindi.\n"
+                "- STRICTLY PRESERVE all numerical measurements (e.g. 2.8m, 22.0 km/h, 28.5°C), physical units, and uppercase safety tags (SAFE, CAUTION, DANGER, MODERATE, HIGH, LOW, UNSUITABLE, LIVE, CACHED, DEMO).\n"
+            )
+        elif language == "mr":
+            target_lang_name = "Marathi (मराठी)"
+            lang_directive = (
+                "\nMANDATORY MULTILINGUAL INSTRUCTION:\n"
+                "- You MUST synthesize and write the ENTIRE response in Marathi (मराठी).\n"
+                "- Translate all safety advice, operational summaries, and oceanographic explanations into fluent Marathi.\n"
+                "- STRICTLY PRESERVE all numerical measurements (e.g. 2.8m, 22.0 km/h, 28.5°C), physical units, and uppercase safety tags (SAFE, CAUTION, DANGER, MODERATE, HIGH, LOW, UNSUITABLE, LIVE, CACHED, DEMO).\n"
+            )
+
         system_prompt = (
             "You are ORCA Marine Intelligence Core, an authoritative AI oceanographer and coastal safety advisory system.\n"
             "STRICT DATA HONESTY INVARIANT (PRD §8):\n"
@@ -175,12 +195,13 @@ class FallbackLLMClient:
             f"- Format your response tailored specifically to the user's role: {role.upper()}.\n"
             "- Deliver a clear, concise, actionable advisory formatted in GitHub markdown with bullet points and bold highlights.\n"
             "- If official warnings exist, prominently feature them."
+            f"{lang_directive}"
         )
 
         user_content = (
             f"User Query: {user_query}\n\n"
             f"Verified Grounded Context:\n{grounded_context}\n\n"
-            "Synthesize an authoritative, clear response answering the user's query while strictly honoring the data above."
+            f"Synthesize an authoritative, clear response answering the user's query while strictly honoring the data above in {target_lang_name}."
         )
 
         messages = [
@@ -246,6 +267,7 @@ async def generate_synthesis(
     user_query: str,
     role: str = "tourist",
     selected_model: str = "auto",
+    language: str = "en",
 ) -> Tuple[Optional[str], str]:
     """Convenience functional wrapper around FallbackLLMClient."""
     return await fallback_client.generate_synthesis(
@@ -253,4 +275,5 @@ async def generate_synthesis(
         user_query=user_query,
         role=role,
         selected_model=selected_model,
+        language=language,
     )

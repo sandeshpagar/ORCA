@@ -73,6 +73,8 @@ export default function AppLayout({
   }
 
   const isMonitorPage = pathname.startsWith("/monitor");
+  const isChatPage = pathname.startsWith("/chat");
+  const isFullscreenApp = isMonitorPage || isChatPage;
 
   return (
     <div className="flex flex-col h-screen h-[100dvh] w-full overflow-hidden bg-surface select-none">
@@ -165,7 +167,7 @@ export default function AppLayout({
       {/* Main Page Content - Automatically fills remaining height between Header and Nav */}
       <main
         className={`flex-1 min-h-0 relative w-full ${
-          isMonitorPage
+          isFullscreenApp
             ? "overflow-hidden"
             : "overflow-y-auto pb-20 md:pb-6"
         }`}

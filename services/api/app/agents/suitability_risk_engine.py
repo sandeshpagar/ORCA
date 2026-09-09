@@ -197,7 +197,7 @@ def evaluate_activity_suitability(
                 "value": "Within 2.0 km",
                 "impact": "warning",
                 "reason": "Location intersects commercial port fairway or restricted channel. Commercial vessels have right of way.",
-                "source": "Odisha Coastal Zone Management Authority (OCZMA)",
+                "source": "Coastal Zone Management Authority (CZMA) & Port Registry",
             })
             warnings.append("Maintain strict clearance from marked commercial navigation channels.")
 

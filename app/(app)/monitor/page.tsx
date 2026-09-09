@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
@@ -978,6 +978,10 @@ export default function MonitorPage() {
     }
   };
 
+  const handleMapCenterChange = useCallback((newCoords: [number, number]) => {
+    setMapCenter(newCoords);
+  }, []);
+
   const activeRegion = useMemo(() => {
     return COASTAL_REGIONS.find((r) => r.id === selectedSectorId) || COASTAL_REGIONS[0];
   }, [selectedSectorId]);
@@ -1236,6 +1240,7 @@ export default function MonitorPage() {
             centerCoords={mapCenter}
             zoomLevel={zoomLevel}
             onZoomChange={(z) => setZoomLevel(z)}
+            onCenterChange={handleMapCenterChange}
             viewScopeMode={viewScopeMode}
             sectorHubs={sectorHubs}
             onSelectSectorHub={handleSelectSectorHub}

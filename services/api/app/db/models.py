@@ -123,3 +123,47 @@ class MapFeature(Base):
     reliability = Column(SQLEnum(ReliabilityMode), nullable=False, default=ReliabilityMode.DEMO)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    source_id = Column(Integer, ForeignKey("data_sources.id", ondelete="SET NULL"), nullable=True)
+    storage_path = Column(String(512), nullable=True)
+    category = Column(String(64), nullable=True)  # regulation, advisory, tourism, safety, research
+    metadata_json = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    content = Column(Text, nullable=False)
+    section_title = Column(String(255), nullable=True)
+    embedding = Column(JSON, nullable=True)  # list of floats for embedding vector
+    tokens_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="chunks")
+
+
+class Observation(Base):
+    __tablename__ = "observations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(Integer, ForeignKey("data_sources.id", ondelete="SET NULL"), nullable=True)
+    observed_at = Column(DateTime(timezone=True), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    metric = Column(String(64), nullable=False)  # sst_celsius, chlorophyll_mg_m3, wave_height_m, wind_kmh, wave_period_s
+    value = Column(Float, nullable=False)
+    reliability = Column(SQLEnum(ReliabilityMode), nullable=False, default=ReliabilityMode.DEMO)
+    properties = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+

@@ -1,6 +1,14 @@
 from typing import Dict, Any, List
 from app.graph.state import AgentState
 from app.llm.fallback_client import fallback_client
+from app.localization.i18n import (
+    localize_tourist_summary,
+    localize_greeting,
+    localize_role_response,
+    get_header,
+    get_suitability_label,
+    get_risk_label,
+)
 
 
 def format_tourist_response(state: AgentState) -> str:
@@ -19,11 +27,40 @@ def format_tourist_response(state: AgentState) -> str:
     gis = state.get("gis_result") or {}
     sources = state.get("sources") or []
     intent = state.get("intent", "")
+    lang = state.get("language", "en") or "en"
 
     activity = (suitability.get("activity") or "beach_visit").replace("_", " ").title()
     rating = suitability.get("suitability", "MODERATE")
     score = suitability.get("score", 75)
     best_time = suitability.get("best_time_window", "06:30 – 11:30 IST")
+    reasons = suitability.get("reasons", [])
+    warnings = risk.get("warnings", [])
+
+    # If non-English language requested (Hindi or Marathi)
+    if lang in ["hi", "mr"]:
+        localized = localize_tourist_summary(
+            activity=activity,
+            suitability_enum=rating,
+            score=score,
+            best_time=best_time,
+            reasons=reasons or ["सागरी व हवामान निर्देशक सुरक्षित मर्यादेत आहेत."],
+            warnings=warnings,
+            lang=lang,
+        )
+        if localized:
+            loc_lines = [localized]
+            nearby_pois = gis.get("nearby_pois") if gis else None
+            if nearby_pois:
+                loc_lines.append(f"\n#### 📍 {get_header('nearby_points', lang)}")
+                for poi in nearby_pois[:3]:
+                    loc_lines.append(f"• **{poi.get('name')}** ({poi.get('distance_km')} km) — *{poi.get('status', 'open')}*")
+            if sources:
+                loc_lines.append(f"\n#### 🛰️ {get_header('data_sources', lang)}")
+                for s in sources:
+                    rel = s.get("reliability", "LIVE")
+                    ts = s.get("timestamp", "Recent")
+                    loc_lines.append(f"• **[{rel}]** {s.get('name')} — *Updated: {ts}*")
+            return "\n".join(loc_lines)
 
     # If query asked "Why is boating unsuitable?" or similar explanation:
     if intent == "risk_explanation":
@@ -67,7 +104,7 @@ def format_tourist_response(state: AgentState) -> str:
     nearby_pois = gis.get("nearby_pois") if gis else None
     if nearby_pois:
         lines.append("\n#### 📍 Nearby Coastal Points")
-        for poi in nearby_pois[:2]:
+        for poi in nearby_pois[:3]:
             lines.append(f"• **{poi.get('name')}** ({poi.get('distance_km')} km away) — *{poi.get('status', 'open').replace('_', ' ').title()}*")
 
     # Warnings Section
@@ -99,6 +136,20 @@ def format_role_response(state: AgentState) -> str:
     temp = f"{weather.get('temperature_c', 30.0):.1f}°C"
     wind = f"{weather.get('wind_speed_kmh', 15.0):.1f} km/h"
     wave = f"{ocean.get('wave_height_m', 1.0):.1f}m" if ocean else "N/A"
+
+    lang = state.get("language", "en") or "en"
+    if lang in ["hi", "mr"]:
+        loc_resp = localize_role_response(
+            role=role,
+            loc_name=loc_name,
+            wave=wave,
+            wind=wind,
+            temp=temp,
+            weather_desc=weather.get("weather_description", "Clear"),
+            lang=lang,
+        )
+        if loc_resp:
+            return loc_resp
 
     if role == "fisher":
         verdict = "SAFE FOR MECHANISED CRAFT" if (ocean.get("wave_height_m") or 1.0) < 2.0 else "CAUTION — SQUALL SURGE"
@@ -160,6 +211,17 @@ def format_greeting_response(state: AgentState) -> str:
 
     telemetry_summary = " · ".join(telemetry_parts) if telemetry_parts else "Real-time telemetry stream active"
 
+    lang = state.get("language", "en") or "en"
+    if lang in ["hi", "mr"]:
+        loc_greet = localize_greeting(
+            loc_name=loc_name,
+            role=role,
+            telemetry_summary=telemetry_summary,
+            lang=lang,
+        )
+        if loc_greet:
+            return loc_greet
+
     return (
         f"### 🌊 ORCA Marine Intelligence Core — {loc_name}\n\n"
         f"Greetings! I am ORCA, an authoritative coastal safety and oceanographic AI decision-support system.\n\n"
@@ -184,6 +246,7 @@ async def recommendation_node(state: AgentState) -> Dict[str, Any]:
     role = state.get("role", "general")
     selected_model = state.get("selected_model") or "auto"
     user_query = state.get("user_query") or ""
+    lang = state.get("language", "en") or "en"
 
     if intent == "greeting":
         deterministic_text = format_greeting_response(state)
@@ -201,6 +264,7 @@ async def recommendation_node(state: AgentState) -> Dict[str, Any]:
             user_query=user_query,
             role=role,
             selected_model=selected_model,
+            language=lang,
         )
         if synthesized:
             final_text = synthesized

@@ -1,11 +1,15 @@
+from pathlib import Path
+from typing import List, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+
+_BASE_DIR = Path(__file__).resolve().parent.parent
+_ENV_PATHS = [str(_BASE_DIR / ".env"), ".env"]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_PATHS,
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
@@ -48,6 +52,21 @@ class Settings(BaseSettings):
             if "@" in password:
                 encoded_password = urllib.parse.quote_plus(urllib.parse.unquote_plus(password))
                 v = f"{scheme}{user}:{encoded_password}@{host}/{db}"
+
+        # Supabase direct hostname `db.<ref>.supabase.co` is IPv6-only, which throws
+        # socket.gaierror [Errno 11001] getaddrinfo failed on Windows and IPv4-only networks.
+        # Automatically translate to the official IPv4 Supavisor connection pooler.
+        if "db.bclravacwzbkknwjyert.supabase.co" in v:
+            v = v.replace(
+                "db.bclravacwzbkknwjyert.supabase.co:5432",
+                "aws-0-ap-southeast-2.pooler.supabase.com:5432",
+            ).replace(
+                "db.bclravacwzbkknwjyert.supabase.co",
+                "aws-0-ap-southeast-2.pooler.supabase.com:5432",
+            )
+            if "postgres:" in v and "postgres.bclravacwzbkknwjyert:" not in v:
+                v = v.replace("postgres:", "postgres.bclravacwzbkknwjyert:", 1)
+
         return v
 
     # CORS origins

@@ -1,8 +1,9 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.auth.deps import get_current_user, AuthenticatedUser
+from app.auth.deps import get_current_user, AuthenticatedUser, get_optional_user_and_role
 from app.db.session import get_db
 from app.db.models import TouristPreference
 from app.schemas.tourist import (
@@ -111,3 +112,42 @@ async def update_tourist_preferences(
     await db.commit()
     await db.refresh(pref)
     return pref
+
+
+from pydantic import BaseModel, Field
+from app.agents.tourist_planner import tourist_planner, TouristTripPlan
+
+
+class TouristPlanRequest(BaseModel):
+    destination: Optional[str] = Field(default=None, description="Destination or beach name")
+    region_name: Optional[str] = Field(default=None, description="Alias for destination")
+    latitude: Optional[float] = Field(default=19.31, description="Target latitude")
+    longitude: Optional[float] = Field(default=84.91, description="Target longitude")
+    activity: Optional[str] = Field(default=None, description="Planned coastal activity")
+    preferred_activity: Optional[str] = Field(default=None, description="Alias for activity")
+    days: Optional[int] = Field(default=3, ge=1, le=5, description="Number of days to forecast (1-5)")
+
+
+plan_router = APIRouter(prefix="/tourist", tags=["Tourist Planning"])
+
+
+@plan_router.post("/plan", response_model=TouristTripPlan)
+async def plan_tourist_trip(
+    payload: TouristPlanRequest = TouristPlanRequest(),
+    user_auth: tuple[str, str] = Depends(get_optional_user_and_role),
+):
+    """
+    Phase 4B: Generates a 3-day time-windowed coastal activity plan
+    evaluating Morning, Afternoon, and Evening suitability windows.
+    Accessible with optional authentication (supports public/demo exploration & authenticated users).
+    """
+    dest = payload.destination or payload.region_name or "Gopalpur Beach"
+    act = payload.activity or payload.preferred_activity or "beach_visit"
+    plan = await tourist_planner.generate_plan(
+        destination_name=dest,
+        latitude=payload.latitude if payload.latitude is not None else 19.31,
+        longitude=payload.longitude if payload.longitude is not None else 84.91,
+        activity=act,
+        days=payload.days or 3,
+    )
+    return plan

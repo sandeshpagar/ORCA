@@ -10,6 +10,7 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = Field(default=None, description="Existing conversation ID")
     selected_model: Optional[str] = Field(default="auto", description="Selected AI model ID: 'auto', 'openrouter/llama-3.3-70b', 'openrouter/gemini-2.0-flash', 'openrouter/qwen-2.5-72b', 'ollama/local', or 'deterministic'")
     region_name: Optional[str] = Field(default=None, description="Target coastal region or sector name (e.g. 'Goa Coastal Sector')")
+    language: Optional[str] = Field(default="en", description="Target language code: 'en', 'hi', 'mr', 'gu', 'or', 'ta'")
 
 
 class DataSourceInfo(BaseModel):
@@ -46,3 +47,24 @@ class ChatResponse(BaseModel):
     model_used: Optional[str] = Field(default="deterministic", description="Model engine that produced the final narrative")
 
 
+class ConversationSummary(BaseModel):
+    id: str
+    title: Optional[str] = "New Conversation"
+    created_at: str
+    message_count: int = 0
+    last_message: Optional[str] = None
+
+
+class ConversationDetail(BaseModel):
+    id: str
+    title: Optional[str] = "New Conversation"
+    created_at: str
+    messages: list[Dict[str, Any]] = []
+
+
+class CreateConversationRequest(BaseModel):
+    title: Optional[str] = None
+
+
+class UpdateConversationRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)

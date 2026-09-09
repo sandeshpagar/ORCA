@@ -52,6 +52,7 @@ interface OceanLeafletMapProps {
   centerCoords?: [number, number];
   zoomLevel: number;
   onZoomChange?: (zoom: number) => void;
+  onCenterChange?: (coords: [number, number]) => void;
   onBboxChange?: (bbox: string) => void;
   viewScopeMode?: "local" | "open_world";
   sectorHubs?: SectorHubData[];
@@ -67,6 +68,7 @@ export default function OceanLeafletMap({
   centerCoords,
   zoomLevel,
   onZoomChange,
+  onCenterChange,
   onBboxChange,
   viewScopeMode = "local",
   sectorHubs = [],
@@ -79,6 +81,8 @@ export default function OceanLeafletMap({
   const bathyLayerRef = useRef<LayerGroup | null>(null);
   const radarLayerRef = useRef<any>(null);
   const baseTilesRef = useRef<any>(null);
+  const lastAppliedCenterRef = useRef<[number, number] | null>(null);
+  const lastAppliedZoomRef = useRef<number | null>(null);
 
   // 1. Initialize Leaflet Map once on mount
   useEffect(() => {
@@ -137,8 +141,17 @@ export default function OceanLeafletMap({
       polygonsLayerRef.current = polygonsLayer;
       bathyLayerRef.current = bathyLayer;
 
-      // Map move/zoom listeners to report dynamic bounding box
+      // Record initial center & zoom
+      lastAppliedCenterRef.current = centerCoords ? [centerCoords[0], centerCoords[1]] : [19.33, 84.98];
+      lastAppliedZoomRef.current = zoomLevel || 9;
+
+      // Map move/zoom listeners to report dynamic bounding box and user-panned center
       map.on("moveend", () => {
+        const center = map.getCenter();
+        lastAppliedCenterRef.current = [center.lat, center.lng];
+        if (onCenterChange) {
+          onCenterChange([center.lat, center.lng]);
+        }
         if (onBboxChange) {
           const bounds = map.getBounds();
           const bbox = `${bounds.getWest().toFixed(3)},${bounds.getSouth().toFixed(3)},${bounds.getEast().toFixed(3)},${bounds.getNorth().toFixed(3)}`;
@@ -147,18 +160,26 @@ export default function OceanLeafletMap({
       });
 
       map.on("zoomend", () => {
+        const z = map.getZoom();
+        lastAppliedZoomRef.current = z;
         if (onZoomChange) {
-          onZoomChange(map.getZoom());
+          onZoomChange(z);
         }
       });
 
       mapInstanceRef.current = map;
+      if (typeof window !== "undefined") {
+        (window as any).__orcaLeafletMap = map;
+      }
     }
 
     init();
 
     return () => {
       isMounted = false;
+      if (typeof window !== "undefined") {
+        (window as any).__orcaLeafletMap = null;
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -166,20 +187,48 @@ export default function OceanLeafletMap({
     };
   }, []);
 
-  // 2. Pan/Fly to searched coordinates and sync zoom
+  // 2. Pan/Fly to searched/selected coordinates ONLY when centerCoords changes externally
+  // (e.g. user selected a new coastal sector, clicked a search result, or clicked a sector hub)
   useEffect(() => {
-    if (mapInstanceRef.current && centerCoords) {
-      const currentCenter = mapInstanceRef.current.getCenter();
-      const dist = Math.hypot(currentCenter.lat - centerCoords[0], currentCenter.lng - centerCoords[1]);
-      if (dist > 3.0) {
-        // Inter-state macro jumps: instant setView to prevent sub-orbital zoom thrashing
-        mapInstanceRef.current.setView(centerCoords, zoomLevel || 9, { animate: false });
-      } else {
-        // Local sector pans: smooth animated pan
-        mapInstanceRef.current.setView(centerCoords, zoomLevel || 9, { animate: true });
+    if (!mapInstanceRef.current || !centerCoords) return;
+
+    // Check if centerCoords matches what the map center already is (within ~10m)
+    const last = lastAppliedCenterRef.current;
+    if (last) {
+      const diffLat = Math.abs(last[0] - centerCoords[0]);
+      const diffLng = Math.abs(last[1] - centerCoords[1]);
+      if (diffLat < 0.0001 && diffLng < 0.0001) {
+        return;
       }
     }
-  }, [centerCoords?.[0], centerCoords?.[1], zoomLevel]);
+
+    lastAppliedCenterRef.current = [centerCoords[0], centerCoords[1]];
+    const currentCenter = mapInstanceRef.current.getCenter();
+    const dist = Math.hypot(currentCenter.lat - centerCoords[0], currentCenter.lng - centerCoords[1]);
+    const currentZoom = mapInstanceRef.current.getZoom();
+    const targetZoom = zoomLevel || currentZoom;
+
+    if (dist > 3.0) {
+      // Inter-state macro jumps: instant setView to prevent sub-orbital zoom thrashing
+      mapInstanceRef.current.setView(centerCoords, targetZoom, { animate: false });
+    } else if (dist > 0.001) {
+      // Local sector pans: smooth animated pan
+      mapInstanceRef.current.setView(centerCoords, targetZoom, { animate: true });
+    }
+  }, [centerCoords?.[0], centerCoords?.[1]]);
+
+  // 3. Sync external zoom level changes WITHOUT resetting or jumping the map center
+  useEffect(() => {
+    if (!mapInstanceRef.current || zoomLevel === undefined) return;
+    if (mapInstanceRef.current.getZoom() === zoomLevel) {
+      lastAppliedZoomRef.current = zoomLevel;
+      return;
+    }
+    if (lastAppliedZoomRef.current !== zoomLevel) {
+      lastAppliedZoomRef.current = zoomLevel;
+      mapInstanceRef.current.setZoom(zoomLevel);
+    }
+  }, [zoomLevel]);
 
   // 4. Render depth bathymetric contours
   useEffect(() => {

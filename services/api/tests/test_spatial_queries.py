@@ -158,3 +158,85 @@ async def test_spatial_containment_endpoint(
     assert data["is_inside_restricted_or_hazard_zone"] is True
     assert len(data["contained_zones"]) >= 1
     assert any("Surge" in z["name"] or "Breaker" in z["name"] for z in data["contained_zones"])
+
+
+def test_dynamic_gis_proximity_juhu_beach():
+    """
+    CRITICAL USER BUG FIX:
+    Querying near Juhu Beach (19.0988, 72.8264) must return nearby Mumbai coastal points
+    (Versova, Bandra Bandstand, Aksa Beach) within 15 km, NOT Gopalpur (1,273 km away in Odisha).
+    """
+    from app.graph.nodes.gis import get_dynamic_gis_features
+
+    gis = get_dynamic_gis_features(19.0988, 72.8264, activity="sightseeing")
+
+    poi_names = [p["name"] for p in gis["nearby_pois"]]
+    assert any("Versova" in name for name in poi_names)
+    assert any("Bandra Bandstand" in name for name in poi_names)
+
+    # Distances must be accurate local distances
+    for p in gis["nearby_pois"]:
+        assert p["distance_km"] < 25.0, f"POI {p['name']} has excessive distance {p['distance_km']} km"
+
+    # Absolute prohibition against returning Odisha features in Mumbai query
+    assert not any("Gopalpur" in name for name in poi_names)
+    assert not any("Aryapalli" in name for name in poi_names)
+    assert gis["region_id"] == "maharashtra"
+
+
+@pytest.mark.asyncio
+async def test_planner_resolves_juhu_destination_and_graph_execution():
+    """
+    Graph integration test:
+    When user asks 'visiting areas near juhu beach', the planner must resolve Juhu Beach,
+    the GIS node must return Mumbai locations, and the final response must not cite Gopalpur.
+    """
+    from app.graph.builder import get_compiled_graph
+
+    graph = get_compiled_graph()
+    state = {
+        "user_id": "test-tourist-juhu",
+        "role": "tourist",
+        "language": "en",
+        "activity": None,
+        "user_query": "list the visiting areas near juhu beach",
+        "location": {"name": "Gopalpur Sector", "latitude": 19.31, "longitude": 84.91},  # user profile had Gopalpur
+        "time_window": {},
+        "intent": "",
+        "weather_result": None,
+        "ocean_result": None,
+        "gis_result": None,
+        "advisory_result": None,
+        "risk_result": None,
+        "activity_suitability": None,
+        "sources": [],
+        "errors": [],
+        "final_response": "",
+        "selected_model": "deterministic",
+        "model_used": "deterministic",
+    }
+
+    result = await graph.ainvoke(state)
+
+    # 1. Planner must have overridden Gopalpur with Juhu Beach coordinates
+    assert "Juhu" in result["location"]["name"]
+    assert abs(result["location"]["latitude"] - 19.0988) < 0.01
+    assert abs(result["location"]["longitude"] - 72.8264) < 0.01
+
+    # 2. Nearby POIs must be Mumbai locations
+    gis = result.get("gis_result")
+    assert gis is not None
+    poi_names = [p["name"] for p in gis["nearby_pois"]]
+    assert any("Versova" in n or "Bandra" in n for n in poi_names)
+    assert not any("Gopalpur" in n for n in poi_names)
+
+    # 3. Final response text must feature the Mumbai POIs and never Gopalpur
+    response_text = result["final_response"]
+    assert "Gopalpur" not in response_text
+    assert any(mumbai_point in response_text for mumbai_point in ["Versova", "Bandra", "Aksa", "Chowpatty"])
+
+    # 4. Regional CZMA attribution must be Maharashtra / MCZMA
+    gis_sources = [s for s in result.get("sources", []) if s.get("type") == "gis"]
+    assert len(gis_sources) >= 1
+    assert "MCZMA" in gis_sources[0]["name"] or "Maharashtra" in gis_sources[0]["name"]
+

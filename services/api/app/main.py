@@ -9,7 +9,11 @@ from app.routers import profile, tourist, chat, data_sources, maps
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize database tables and seed data sources
-    await init_db()
+    try:
+        await init_db()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Startup init_db encountered non-fatal notice: %s", exc)
     yield
 
 
@@ -40,6 +44,7 @@ app.include_router(chat.router)  # Provides POST /chat
 app.include_router(chat.router, prefix="/api")  # Also provides POST /api/chat
 app.include_router(profile.router, prefix="/api")
 app.include_router(tourist.router, prefix="/api")
+app.include_router(tourist.plan_router, prefix="/api")
 app.include_router(data_sources.router, prefix="/api")
 app.include_router(maps.router)
 

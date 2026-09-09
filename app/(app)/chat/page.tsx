@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_BASE_URL } from "@/lib/supabase";
 import { COASTAL_REGIONS, CoastalRegion } from "@/lib/regions";
+import ConversationDrawer, { ConversationItem } from "@/components/chat/ConversationDrawer";
 
 interface ChatMessage {
   id: string;
@@ -111,7 +112,16 @@ const AI_MODELS: AIModelOption[] = [
   },
 ];
 
-const languages = ["EN", "हिंदी", "मराठी", "ગુજરાતી", "ଓଡ଼ିଆ", "தமிழ்"];
+const LANGUAGES = [
+  { code: "en", label: "EN", name: "English" },
+  { code: "hi", label: "हिंदी", name: "Hindi" },
+  { code: "mr", label: "मराठी", name: "Marathi" },
+  { code: "gu", label: "ગુજરાતી", name: "Gujarati" },
+  { code: "or", label: "ଓଡ଼ିଆ", name: "Odia" },
+  { code: "ta", label: "தமிழ்", name: "Tamil" },
+];
+
+const languages = LANGUAGES.map((l) => l.label);
 
 const suggestionChips = [
   "Is it safe to swim at Puri Beach today?",
@@ -251,6 +261,16 @@ export default function ChatPage() {
       console.warn("Could not load stored model choice", e);
     }
 
+    try {
+      const savedLang = localStorage.getItem("orca_selected_language");
+      if (savedLang) {
+        const langIdx = LANGUAGES.findIndex((l) => l.code === savedLang);
+        if (langIdx !== -1) setCurrentLangIdx(langIdx);
+      }
+    } catch (e) {
+      console.warn("Could not load stored language choice", e);
+    }
+
     const syncSector = () => {
       try {
         const savedSector = localStorage.getItem("orca_selected_sector");
@@ -320,6 +340,257 @@ export default function ChatPage() {
     }
   };
 
+  // Chat History Drawer State
+  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
+  const [activeConversationId, setActiveConversationId] = useState<string>("default-conv");
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [isConversationsLoading, setIsConversationsLoading] = useState<boolean>(false);
+
+  // Responsive default: start collapsed on mobile screens, restore last active conversation
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (window.innerWidth < 768) {
+        setIsDrawerOpen(false);
+      }
+      try {
+        const savedDrawerState = localStorage.getItem("orca_chat_drawer_open");
+        if (savedDrawerState !== null) {
+          setIsDrawerOpen(savedDrawerState === "true");
+        }
+        const savedActiveConv = localStorage.getItem("orca_active_conv_id");
+        if (savedActiveConv) {
+          setActiveConversationId(savedActiveConv);
+        }
+      } catch (e) {
+        console.warn("Could not read drawer storage", e);
+      }
+    }
+  }, []);
+
+  const toggleDrawer = () => {
+    setIsDrawerOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("orca_chat_drawer_open", String(next));
+      } catch (e) {}
+      return next;
+    });
+  };
+
+  // Fetch or restore conversations list
+  const loadConversations = async () => {
+    setIsConversationsLoading(true);
+    let localList: ConversationItem[] = [];
+    try {
+      const saved = localStorage.getItem("orca_conversations_v1");
+      if (saved) {
+        localList = JSON.parse(saved);
+      }
+    } catch (e) {}
+
+    try {
+      const token = getBearerToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`${API_BASE_URL}/chat/conversations`, { headers });
+      if (res.ok) {
+        const remoteList: ConversationItem[] = await res.json();
+        // Merge remote and local without duplicates
+        const map = new Map<string, ConversationItem>();
+        remoteList.forEach((c) => map.set(c.id, c));
+        localList.forEach((c) => {
+          if (!map.has(c.id)) map.set(c.id, c);
+        });
+        const merged = Array.from(map.values()).sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        setConversations(merged);
+        try {
+          localStorage.setItem("orca_conversations_v1", JSON.stringify(merged));
+        } catch (e) {}
+        setIsConversationsLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.warn("Could not fetch remote conversations, using local fallback", e);
+    }
+
+    if (localList.length === 0) {
+      // Seed default initial conversation
+      const seedConv: ConversationItem = {
+        id: "default-conv",
+        title: "Fisherfolk Telemetry — Gopalpur",
+        created_at: new Date().toISOString(),
+        message_count: 2,
+        last_message: "Can mechanised trawlers venture 15 nautical miles off Gopalpur?",
+      };
+      localList = [seedConv];
+      try {
+        localStorage.setItem("orca_conversations_v1", JSON.stringify(localList));
+      } catch (e) {}
+    }
+    setConversations(localList);
+    setIsConversationsLoading(false);
+  };
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  const handleNewChat = () => {
+    const newId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    setActiveConversationId(newId);
+    try {
+      localStorage.setItem("orca_active_conv_id", newId);
+    } catch (e) {}
+
+    const welcomeMsg: ChatMessage = {
+      id: `welcome-${Date.now()}`,
+      role: "assistant",
+      content: `🌊 **ORCA Marine Advisory Ready — ${activeRegion.name}**\n\nLive telemetry connected for **${activeRegion.name}** (${activeRegion.center[0].toFixed(2)}°N, ${activeRegion.center[1].toFixed(2)}°E).\n\nAsk about sea state, wave heights, fishing zones, or coastal tourism safety.`,
+      timestamp: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+      safetyVerdict: "safe",
+      isLive: true,
+      modelUsed: selectedModel,
+    };
+    const freshMessages = [welcomeMsg];
+    setMessages(freshMessages);
+    memoryChatCache = freshMessages;
+
+    const newConv: ConversationItem = {
+      id: newId,
+      title: `Advisory — ${activeRegion.name}`,
+      created_at: new Date().toISOString(),
+      message_count: 1,
+      last_message: welcomeMsg.content.slice(0, 60),
+    };
+
+    setConversations((prev) => [newConv, ...prev]);
+    try {
+      localStorage.setItem(`orca_conv_${newId}`, JSON.stringify(freshMessages));
+      const savedList: ConversationItem[] = JSON.parse(
+        localStorage.getItem("orca_conversations_v1") || "[]"
+      );
+      localStorage.setItem(
+        "orca_conversations_v1",
+        JSON.stringify([newConv, ...savedList.filter((c) => c.id !== newId)])
+      );
+    } catch (e) {}
+  };
+
+  const handleSelectConversation = async (convId: string) => {
+    setActiveConversationId(convId);
+    try {
+      localStorage.setItem("orca_active_conv_id", convId);
+    } catch (e) {}
+
+    // First check local cache
+    try {
+      const cached = localStorage.getItem(`orca_conv_${convId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+          memoryChatCache = parsed;
+        }
+      }
+    } catch (e) {}
+
+    // Fetch from backend
+    try {
+      const token = getBearerToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`${API_BASE_URL}/chat/conversations/${convId}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages && data.messages.length > 0) {
+          const loaded: ChatMessage[] = data.messages.map((m: any) => ({
+            id: String(m.id),
+            role: m.role,
+            content: m.content,
+            timestamp: new Date(m.created_at).toLocaleTimeString("en-IN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+            metrics: m.metadata?.metrics,
+            dataSource: m.metadata?.data_source,
+            safetyVerdict: m.metadata?.safety_verdict || "unknown",
+            isLive: m.metadata?.is_live ?? true,
+            activeNodes: m.metadata?.active_nodes,
+            activitySuitability: m.metadata?.activity_suitability,
+            riskResult: m.metadata?.risk_result,
+            sourcesList: m.metadata?.sources,
+            modelUsed: m.metadata?.model_used || "deterministic",
+          }));
+          setMessages(loaded);
+          memoryChatCache = loaded;
+          try {
+            localStorage.setItem(`orca_conv_${convId}`, JSON.stringify(loaded));
+          } catch (e) {}
+        }
+      }
+    } catch (err) {
+      console.warn("Backend conversation fetch failed, using local cache:", err);
+    }
+  };
+
+  const handleRenameConversation = async (convId: string, newTitle: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, title: newTitle } : c))
+    );
+    try {
+      const savedList: ConversationItem[] = JSON.parse(
+        localStorage.getItem("orca_conversations_v1") || "[]"
+      );
+      const updated = savedList.map((c) => (c.id === convId ? { ...c, title: newTitle } : c));
+      localStorage.setItem("orca_conversations_v1", JSON.stringify(updated));
+    } catch (e) {}
+
+    try {
+      const token = getBearerToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      await fetch(`${API_BASE_URL}/chat/conversations/${convId}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ title: newTitle }),
+      });
+    } catch (e) {
+      console.warn("Backend rename failed:", e);
+    }
+  };
+
+  const handleDeleteConversation = async (convId: string) => {
+    setConversations((prev) => prev.filter((c) => c.id !== convId));
+    try {
+      localStorage.removeItem(`orca_conv_${convId}`);
+      const savedList: ConversationItem[] = JSON.parse(
+        localStorage.getItem("orca_conversations_v1") || "[]"
+      );
+      localStorage.setItem(
+        "orca_conversations_v1",
+        JSON.stringify(savedList.filter((c) => c.id !== convId))
+      );
+    } catch (e) {}
+
+    try {
+      const token = getBearerToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      await fetch(`${API_BASE_URL}/chat/conversations/${convId}`, {
+        method: "DELETE",
+        headers,
+      });
+    } catch (e) {
+      console.warn("Backend delete failed:", e);
+    }
+
+    if (convId === activeConversationId) {
+      handleNewChat();
+    }
+  };
+
   // Persist chat history to localStorage and memory cache on update
   // CRITICAL: isLoadedRef prevents overwriting saved history on initial mount
   useEffect(() => {
@@ -327,23 +598,26 @@ export default function ChatPage() {
     memoryChatCache = messages;
     try {
       localStorage.setItem("orca_chat_history", JSON.stringify(messages));
+      localStorage.setItem(`orca_conv_${activeConversationId}`, JSON.stringify(messages));
     } catch (e) {
       console.warn("Could not persist chat history", e);
     }
-  }, [messages]);
+  }, [messages, activeConversationId]);
 
   const clearChatHistory = () => {
-    memoryChatCache = INITIAL_SEED_MESSAGES;
-    setMessages(INITIAL_SEED_MESSAGES);
-    try {
-      localStorage.removeItem("orca_chat_history");
-    } catch (e) {
-      console.warn("Could not clear chat history", e);
-    }
+    handleNewChat();
   };
 
   const cycleLanguage = () => {
-    setCurrentLangIdx((prev) => (prev + 1) % languages.length);
+    setCurrentLangIdx((prev) => {
+      const next = (prev + 1) % LANGUAGES.length;
+      try {
+        localStorage.setItem("orca_selected_language", LANGUAGES[next].code);
+      } catch (e) {
+        console.warn("Could not save language choice", e);
+      }
+      return next;
+    });
   };
 
   const handleSendMessage = async (queryText?: string) => {
@@ -361,7 +635,9 @@ export default function ChatPage() {
       }),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const currentConvId = activeConversationId;
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
     setInputText("");
     setIsLoading(true);
 
@@ -382,10 +658,12 @@ export default function ChatPage() {
         headers,
         body: JSON.stringify({
           query: textToSend.trim(),
+          conversation_id: currentConvId,
           latitude: activeRegion.center[0],
           longitude: activeRegion.center[1],
           region_name: activeRegion.name,
           selected_model: selectedModel,
+          language: LANGUAGES[currentLangIdx]?.code || "en",
         }),
       });
 
@@ -421,7 +699,48 @@ export default function ChatPage() {
         modelUsed: data.model_used || "deterministic",
       };
 
-      setMessages((prev) => [...prev, assistantMsg]);
+      const finalMessages = [...updatedMessages, assistantMsg];
+      setMessages(finalMessages);
+      memoryChatCache = finalMessages;
+
+      // Update active conversation in drawer
+      setConversations((prev) => {
+        let found = false;
+        const updated = prev.map((c) => {
+          if (c.id === currentConvId) {
+            found = true;
+            const newTitle =
+              c.title.startsWith("New Marine Chat") || c.title.startsWith("Advisory —")
+                ? textToSend.slice(0, 36) + (textToSend.length > 36 ? "..." : "")
+                : c.title;
+            return {
+              ...c,
+              title: newTitle,
+              message_count: finalMessages.length,
+              last_message: assistantMsg.content.slice(0, 80),
+            };
+          }
+          return c;
+        });
+
+        if (!found) {
+          const newTitle = textToSend.slice(0, 36) + (textToSend.length > 36 ? "..." : "");
+          updated.unshift({
+            id: currentConvId,
+            title: newTitle,
+            created_at: new Date().toISOString(),
+            message_count: finalMessages.length,
+            last_message: assistantMsg.content.slice(0, 80),
+          });
+        }
+
+        try {
+          localStorage.setItem("orca_conversations_v1", JSON.stringify(updated));
+          localStorage.setItem(`orca_conv_${currentConvId}`, JSON.stringify(finalMessages));
+        } catch (e) {}
+
+        return updated;
+      });
     } catch (err: any) {
       console.warn("Error calling /chat endpoint:", err);
       // Data honesty: report connection/API error without making up fake metrics
@@ -464,32 +783,66 @@ export default function ChatPage() {
   });
 
   return (
-    <div className="flex-1 flex flex-col relative w-full bg-surface min-h-[calc(100dvh-4rem)]">
-      {/* Operational Telemetry Bar & Context Ribbon */}
-      <section className="px-margin-mobile md:px-margin-desktop pt-space-xs pb-space-sm bg-surface-container-low flex flex-col gap-space-xs shadow-sm border-b border-surface-container">
-        <div className="max-w-3xl mx-auto w-full flex flex-col gap-space-xs">
-          <div className="flex items-center justify-between gap-space-xs">
-            {/* Interactive Sector Switcher synced with Monitor */}
-            <div className="relative min-w-0">
-              <button
-                type="button"
-                onClick={() => setIsSectorDropdownOpen((prev) => !prev)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-highest hover:bg-surface-container border border-surface-container/70 transition-all text-left group"
-                title="Change active coastal monitoring sector (syncs with Monitor)"
-                id="chat-sector-switcher-btn"
-              >
+    <div className="flex flex-row relative w-full h-full overflow-hidden bg-surface">
+      {/* Gemini-Style Chat History Left Drawer */}
+      <ConversationDrawer
+        isOpen={isDrawerOpen}
+        onToggle={toggleDrawer}
+        activeConversationId={activeConversationId}
+        onSelectConversation={handleSelectConversation}
+        onNewChat={handleNewChat}
+        conversations={conversations}
+        onRenameConversation={handleRenameConversation}
+        onDeleteConversation={handleDeleteConversation}
+        isLoading={isConversationsLoading}
+      />
+
+      {/* Main Chat Workspace */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden relative">
+        {/* Operational Telemetry Bar & Context Ribbon */}
+        <section className="px-margin-mobile md:px-margin-desktop pt-space-xs pb-space-sm bg-surface-container-low flex flex-col gap-space-xs shadow-sm border-b border-surface-container shrink-0">
+          <div className="max-w-3xl mx-auto w-full flex flex-col gap-space-xs">
+            <div className="flex items-center justify-between gap-space-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                {/* Chat History Toggle Button */}
+                <button
+                  type="button"
+                  onClick={toggleDrawer}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-full border transition-all text-xs font-mono font-semibold shrink-0 ${
+                    isDrawerOpen
+                      ? "bg-primary text-on-primary border-primary shadow-xs"
+                      : "bg-surface-container-highest hover:bg-surface-container text-on-surface-variant border-surface-container/70"
+                  }`}
+                  title={isDrawerOpen ? "Hide Chat History" : "Show Chat History"}
+                  id="chat-drawer-toggle-btn"
+                >
+                  <span className="material-symbols-outlined text-[15px] leading-none shrink-0 select-none">
+                    {isDrawerOpen ? "dock_to_right" : "dock_to_left"}
+                  </span>
+                  <span className="hidden sm:inline">History</span>
+                </button>
+
+                {/* Interactive Sector Switcher synced with Monitor */}
+                <div className="relative min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsSectorDropdownOpen((prev) => !prev)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-highest hover:bg-surface-container border border-surface-container/70 transition-all text-left group"
+                    title="Change active coastal monitoring sector (syncs with Monitor)"
+                    id="chat-sector-switcher-btn"
+                  >
                 <span className="relative flex h-2 w-2 shrink-0">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-secondary" />
                 </span>
                 <div className="flex items-center gap-1 min-w-0">
-                  <span className="font-label-md text-label-md text-primary font-bold truncate font-mono group-hover:text-secondary transition-colors">
+                  <span className="font-label-md text-label-md text-primary font-bold truncate font-mono group-hover:text-secondary transition-colors max-w-[110px] sm:max-w-[170px]">
                     {activeRegion.name}
                   </span>
-                  <span className="text-[11px] font-mono text-on-surface-variant hidden sm:inline">
+                  <span className="text-[11px] font-mono text-on-surface-variant hidden lg:inline">
                     ({activeRegion.center[0].toFixed(2)}°N, {activeRegion.center[1].toFixed(2)}°E)
                   </span>
-                  <span className="material-symbols-outlined text-[16px] text-on-surface-variant group-hover:text-primary transition-colors">
+                  <span className="material-symbols-outlined text-[15px] leading-none text-on-surface-variant group-hover:text-primary transition-colors shrink-0 select-none">
                     {isSectorDropdownOpen ? "expand_less" : "expand_more"}
                   </span>
                 </div>
@@ -520,7 +873,7 @@ export default function ChatPage() {
                           }`}
                         >
                           <span
-                            className={`material-symbols-outlined text-[16px] mt-0.5 shrink-0 ${
+                            className={`material-symbols-outlined text-[15px] leading-none mt-0.5 shrink-0 select-none ${
                               isSelected ? "text-primary font-bold" : "text-on-surface-variant"
                             }`}
                           >
@@ -545,6 +898,7 @@ export default function ChatPage() {
                 </>
               )}
             </div>
+          </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
               {/* Active AI Model Indicator */}
@@ -552,7 +906,7 @@ export default function ChatPage() {
                 className="flex items-center gap-1 bg-surface-container-highest px-space-xs py-1 rounded-full text-on-surface-variant text-label-sm font-label-sm shrink-0 border border-surface-container/60 font-mono text-[11px]"
                 title="Active AI Model (Change at bottom composer)"
               >
-                <span className="material-symbols-outlined text-[14px] text-secondary">
+                <span className="material-symbols-outlined text-[15px] leading-none shrink-0 select-none text-secondary">
                   {(AI_MODELS.find((m) => m.id === selectedModel) || AI_MODELS[0]).icon}
                 </span>
                 <span className="font-semibold text-primary max-w-[85px] sm:max-w-none truncate">
@@ -567,7 +921,7 @@ export default function ChatPage() {
                 id="reset-chat-btn"
                 title="Reset conversation to initial state"
               >
-                <span className="material-symbols-outlined text-[13px]">refresh</span>
+                <span className="material-symbols-outlined text-[14px] leading-none shrink-0 select-none">refresh</span>
                 <span className="text-[11px] font-mono">Reset</span>
               </button>
 
@@ -578,11 +932,11 @@ export default function ChatPage() {
                 id="lang-btn"
                 title="Switch language"
               >
-                <span className="material-symbols-outlined text-[15px] text-primary">translate</span>
-                <span className="font-semibold text-primary">{languages[currentLangIdx]}</span>
+                <span className="material-symbols-outlined text-[15px] leading-none shrink-0 select-none text-primary">translate</span>
+                <span className="font-semibold text-primary">{LANGUAGES[currentLangIdx].label}</span>
                 <span className="text-outline">|</span>
-                <span className="text-[11px]">{languages[(currentLangIdx + 1) % languages.length]}</span>
-                <span className="material-symbols-outlined text-[14px]">expand_more</span>
+                <span className="text-[11px]">{LANGUAGES[(currentLangIdx + 1) % LANGUAGES.length].label}</span>
+                <span className="material-symbols-outlined text-[14px] leading-none shrink-0 select-none">expand_more</span>
               </button>
             </div>
           </div>
@@ -601,8 +955,12 @@ export default function ChatPage() {
         </div>
       </section>
 
-      {/* Main Conversational Stream */}
-      <section className="flex-1 px-margin-mobile md:px-margin-desktop py-space-md flex flex-col gap-space-lg max-w-3xl mx-auto w-full pb-36">
+      {/* Main Conversational Stream - Fully Scrollable Messages Viewport */}
+      <div
+        id="chat-messages-scroll-area"
+        className="flex-1 min-h-0 overflow-y-auto w-full overscroll-contain"
+      >
+        <section className="px-margin-mobile md:px-margin-desktop py-space-md flex flex-col gap-space-lg max-w-3xl mx-auto w-full pb-4">
         {messages.map((msg) => {
           if (msg.role === "user") {
             return (
@@ -1005,9 +1363,10 @@ export default function ChatPage() {
         )}
         <div ref={messagesEndRef} className="h-4" />
       </section>
+    </div>
 
-      {/* Floating Prompt Input Dock & Quick Chips */}
-      <footer className="fixed bottom-14 md:bottom-0 left-0 right-0 z-40 bg-surface/95 backdrop-blur-xl border-t border-surface-container p-3">
+      {/* Docked Prompt Input Dock & Quick Chips */}
+      <footer className="shrink-0 bg-surface/95 backdrop-blur-xl border-t border-surface-container p-3 z-20">
         <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
           {/* Quick Suggestion Chips */}
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
@@ -1131,5 +1490,6 @@ export default function ChatPage() {
         </div>
       </footer>
     </div>
+  </div>
   );
 }
