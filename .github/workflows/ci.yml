@@ -34,7 +34,7 @@ jobs:
           PYTHONPATH: .
           ENVIRONMENT: "test"
           SUPABASE_JWT_SECRET: "ci-test-jwt-secret-key-32charslong!"
-          ADMIN_EMAIL: "admin@isro.gov.in"
+          ADMIN_EMAIL: "admin@gmail.com"
           ADMIN_PASSWORD: "CiTestPassword123!"
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           TESTING: "true"

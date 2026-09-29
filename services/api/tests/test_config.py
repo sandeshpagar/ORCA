@@ -100,11 +100,15 @@ def test_database_url_normalization():
     assert s2.DATABASE_URL.startswith("postgresql+asyncpg://")
 
 
-def test_openrouter_key_prefers_valid_env_file_over_stale_system_env(monkeypatch):
+def test_openrouter_key_prefers_valid_env_file_over_stale_system_env(tmp_path, monkeypatch):
     """Verify that a truncated or invalid system env var does not override a valid key from .env file."""
+    import app.config as config_mod
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENROUTER_API_KEY=sk-or-v1-validkeylongerthanthirtycharacters12345\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "_BASE_DIR", tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-stale18chars")
     s = Settings()
-    # The valid key from services/api/.env is 73 chars; it must not be corrupted by the 18-char stale system env var
+    # The valid key from .env is >= 30 chars; it must not be corrupted by the 18-char stale system env var
     assert len(s.OPENROUTER_API_KEY) >= 30
     assert not s.OPENROUTER_API_KEY.endswith("stale18chars")
 

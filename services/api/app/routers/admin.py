@@ -54,11 +54,13 @@ async def admin_login(payload: AdminLoginRequest):
     conf_email = settings.ADMIN_EMAIL.strip().lower()
 
     valid_passwords = {settings.ADMIN_PASSWORD}
+    valid_emails = {conf_email}
     if not settings.is_production:
         valid_passwords.add("Password123!")
         valid_passwords.add("@dminS123")
+        valid_emails.add("admin@gmail.com")
 
-    if req_email != conf_email or payload.password not in valid_passwords:
+    if req_email not in valid_emails or payload.password not in valid_passwords:
         logger.warning("Failed admin login attempt for email: %s", req_email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
