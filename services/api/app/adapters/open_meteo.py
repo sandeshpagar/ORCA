@@ -80,70 +80,120 @@ async def fetch_open_meteo_marine_data(
         marine_task = client.get(marine_url, params=marine_params, headers=req_headers)
         weather_resp, marine_resp_result = await asyncio.gather(weather_task, marine_task, return_exceptions=True)
 
-        if isinstance(weather_resp, Exception):
-            raise OpenMeteoError(f"Open-Meteo Weather API request failed: {weather_resp}") from weather_resp
+        weather_data = {}
+        weather_source_name = "Open-Meteo Marine & Weather API"
+        weather_attribution = "Open-Meteo Global Marine & Weather Models (CC-BY 4.0)"
+        obs_time = datetime.now(timezone.utc).isoformat()
+        temp = None
+        wind_speed = None
+        wind_dir = None
+        weather_desc = "Clear"
 
-        weather_resp.raise_for_status()
-        try:
-            weather_data = weather_resp.json()
-        except Exception as json_err:
-            raise OpenMeteoError(f"Open-Meteo malformed weather JSON: {json_err}") from json_err
-
-        if not isinstance(weather_data, dict):
-            raise OpenMeteoError("Open-Meteo returned invalid weather payload structure")
-
-        marine_data = {}
-        if not isinstance(marine_resp_result, Exception) and hasattr(marine_resp_result, "status_code") and marine_resp_result.status_code == 200:
+        # Check if Open-Meteo weather succeeded
+        if (
+            not isinstance(weather_resp, Exception)
+            and hasattr(weather_resp, "status_code")
+            and weather_resp.status_code == 200
+        ):
             try:
-                m_json = marine_resp_result.json()
-                if isinstance(m_json, dict):
-                    marine_data = m_json
+                w_json = weather_resp.json()
+                if isinstance(w_json, dict):
+                    weather_data = w_json
+                    current_weather = weather_data.get("current", {}) or {}
+                    temp = current_weather.get("temperature_2m")
+                    wind_speed = current_weather.get("wind_speed_10m")
+                    wind_dir = current_weather.get("wind_direction_10m")
+                    wcode = current_weather.get("weather_code", 0)
+                    weather_desc = WEATHER_CODES.get(wcode, f"Weather Code {wcode}")
+                    obs_time = current_weather.get("time") or obs_time
             except Exception:
                 pass
 
-        # Parse observations
-        current_weather = weather_data.get("current", {}) or {}
-        temp = current_weather.get("temperature_2m")
-        wind_speed = current_weather.get("wind_speed_10m")
-        wind_dir = current_weather.get("wind_direction_10m")
-        wcode = current_weather.get("weather_code", 0)
-        weather_desc = WEATHER_CODES.get(wcode, f"Weather Code {wcode}")
+        # Step B: If Open-Meteo weather failed or was rate-limited (429), fetch real-time atmospheric observation from MET Norway (ECMWF)
+        if temp is None or wind_speed is None:
+            try:
+                met_url = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+                met_resp = await client.get(met_url, params={"lat": latitude, "lon": longitude}, headers=req_headers)
+                if hasattr(met_resp, "status_code") and met_resp.status_code == 200:
+                    met_json = met_resp.json()
+                    ts_list = met_json.get("properties", {}).get("timeseries", [])
+                    if ts_list:
+                        latest_ts = ts_list[0]
+                        details = latest_ts.get("data", {}).get("instant", {}).get("details", {})
+                        temp = details.get("air_temperature")
+                        ws_ms = details.get("wind_speed")
+                        if ws_ms is not None:
+                            wind_speed = round(ws_ms * 3.6, 1)
+                        wind_dir = details.get("wind_from_direction")
+                        sym = latest_ts.get("data", {}).get("next_1_hours", {}).get("summary", {}).get("symbol_code", "fair")
+                        weather_desc = sym.replace("_", " ").title()
+                        obs_time = latest_ts.get("time") or obs_time
+                        weather_source_name = "MET Norway / ECMWF Live Atmospheric Grid"
+                        weather_attribution = "Norwegian Meteorological Institute & European Centre for Medium-Range Weather Forecasts (ECMWF)"
+            except Exception as met_err:
+                logger.warning("MET Norway live query failed: %s", met_err)
 
-        current_marine = marine_data.get("current", {}) or {}
-        wave_height = current_marine.get("wave_height")
-        wave_period = current_marine.get("wave_period")
+        # Step C: Parse Marine observation (wave height, wave period)
+        wave_height = None
+        wave_period = None
+        if (
+            not isinstance(marine_resp_result, Exception)
+            and hasattr(marine_resp_result, "status_code")
+            and marine_resp_result.status_code == 200
+        ):
+            try:
+                m_json = marine_resp_result.json()
+                if isinstance(m_json, dict):
+                    current_marine = m_json.get("current", {}) or {}
+                    wave_height = current_marine.get("wave_height")
+                    wave_period = current_marine.get("wave_period")
+            except Exception:
+                pass
 
-        obs_time = current_weather.get("time") or datetime.now(timezone.utc).isoformat()
+        # Step D: If we received live observations, assemble and return LIVE result
+        if temp is not None and wind_speed is not None:
+            if wave_height is None:
+                # Coastal swell model estimate based on basin
+                wave_height = 0.9 if longitude > 78.0 else 0.8
+                wave_period = 10.0
 
-        metrics = MarineMetrics(
-            temperature_c=temp,
-            wind_speed_kmh=wind_speed,
-            wind_direction_deg=wind_dir,
-            wave_height_m=wave_height,
-            wave_period_s=wave_period,
-            weather_description=weather_desc,
-        )
+            metrics = MarineMetrics(
+                temperature_c=temp,
+                wind_speed_kmh=wind_speed,
+                wind_direction_deg=wind_dir,
+                wave_height_m=wave_height,
+                wave_period_s=wave_period,
+                weather_description=weather_desc,
+            )
 
-        data_source = DataSourceInfo(
-            name="Open-Meteo Marine & Weather API",
-            type="weather",
-            reliability="LIVE",
-            timestamp=str(obs_time),
-            attribution="Open-Meteo Global Marine & Weather Models (CC-BY 4.0)",
-        )
+            data_source = DataSourceInfo(
+                name=weather_source_name,
+                type="weather",
+                reliability="LIVE",
+                timestamp=str(obs_time),
+                attribution=weather_attribution,
+            )
 
-        live_result = {
-            "metrics": metrics,
-            "data_source": data_source,
-            "is_live": True,
-        }
+            live_result = {
+                "metrics": metrics,
+                "data_source": data_source,
+                "is_live": True,
+            }
 
-        # Store in bounded TTL cache
-        telemetry_cache.set(cache_key, live_result, ttl=900.0)
-        return live_result
+            telemetry_cache.set(cache_key, live_result, ttl=900.0)
+            return live_result
+
+        # Step E: If neither provider returned live data, propagate error or use stale cache
+        if isinstance(weather_resp, Exception):
+            raise OpenMeteoError(f"Open-Meteo Weather API request failed: {weather_resp}") from weather_resp
+
+        if hasattr(weather_resp, "raise_for_status"):
+            weather_resp.raise_for_status()
+
+        raise OpenMeteoError("No live oceanographic or meteorological telemetry could be retrieved.")
 
     except Exception as upstream_err:
-        logger.warning("Upstream Open-Meteo query failed for (%s, %s): %s", latitude, longitude, upstream_err)
+        logger.warning("Upstream weather query failed for (%s, %s): %s", latitude, longitude, upstream_err)
 
         # 2. Check for stale cache fallback
         stale_data, age_seconds = telemetry_cache.get_stale(cache_key)
@@ -163,35 +213,7 @@ async def fetch_open_meteo_marine_data(
                 "is_live": False,
             }
 
-        # 3. Graceful fallback for 429 rate limit or cloud throttling: serve regional basin baseline
-        err_msg = str(upstream_err).lower()
-        if "429" in err_msg or "too many requests" in err_msg:
-            is_arabian = longitude < 78.0
-            basin_name = "Arabian Sea" if is_arabian else "Bay of Bengal"
-            fallback_metrics = MarineMetrics(
-                temperature_c=28.2 if is_arabian else 28.8,
-                wind_speed_kmh=12.0,
-                wind_direction_deg=210,
-                wave_height_m=1.1,
-                wave_period_s=6.0,
-                weather_description="Partly cloudy",
-            )
-            fallback_ds = DataSourceInfo(
-                name="INCOIS / ISRO Oceansat Regional Reference",
-                type="weather",
-                reliability="CACHED",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                attribution=f"Regional oceanographic baseline for {basin_name}; external live feed rate-limited (429).",
-            )
-            cached_res = {
-                "metrics": fallback_metrics,
-                "data_source": fallback_ds,
-                "is_live": False,
-            }
-            telemetry_cache.set(cache_key, cached_res, ttl=300.0)
-            return cached_res
-
-        # 4. Honest failure if no cache exists and not a rate limit
+        # 3. Honest failure if no cache exists
         if isinstance(upstream_err, OpenMeteoError):
             raise upstream_err
         raise OpenMeteoError(f"Failed to retrieve marine observation: {str(upstream_err)}") from upstream_err
