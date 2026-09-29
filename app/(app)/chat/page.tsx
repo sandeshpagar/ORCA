@@ -1,63 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useAuth } from "@/contexts/AuthContext";
-import { API_BASE_URL } from "@/lib/supabase";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useAuth, UserRole } from "@/contexts/AuthContext";
+import { useChat, ChatMessage, LANGUAGES, SPEECH_LANG_MAP } from "@/contexts/ChatContext";
 import { COASTAL_REGIONS, CoastalRegion } from "@/lib/regions";
-import ConversationDrawer, { ConversationItem } from "@/components/chat/ConversationDrawer";
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: string;
-  metrics?: {
-    temperature_c?: number | null;
-    wind_speed_kmh?: number | null;
-    wind_direction_deg?: number | null;
-    wave_height_m?: number | null;
-    wave_period_s?: number | null;
-    weather_description?: string | null;
-  };
-  dataSource?: {
-    name: string;
-    type: string;
-    reliability: "LIVE" | "CACHED" | "DEMO";
-    timestamp: string;
-    attribution: string;
-  };
-  safetyVerdict?: "safe" | "caution" | "danger" | "unknown";
-  isLive?: boolean;
-  activeNodes?: string[];
-  activitySuitability?: {
-    activity: string;
-    suitability: "HIGH" | "MODERATE" | "LOW" | "UNSUITABLE";
-    score: number;
-    factors: Array<{
-      factor: string;
-      value: string;
-      impact: "favorable" | "warning" | "critical";
-      reason: string;
-    }>;
-    reasons: string[];
-    best_time_window: string;
-    summary: string;
-  };
-  riskResult?: {
-    level: string;
-    score: number;
-    factors: any[];
-    warnings: string[];
-  };
-  sourcesList?: Array<{
-    name: string;
-    type: string;
-    reliability: string;
-    timestamp: string;
-    attribution: string;
-  }>;
-  modelUsed?: string;
-}
+import ConversationDrawer from "@/components/chat/ConversationDrawer";
+import { getDynamicRecommendations, ROLE_DETAILS } from "@/lib/recommendations";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 
 interface AIModelOption {
   id: string;
@@ -76,25 +25,32 @@ const AI_MODELS: AIModelOption[] = [
     icon: "auto_mode",
   },
   {
-    id: "openrouter/llama-3.3-70b",
-    name: "Llama 3.3 70B",
-    badge: "FREE CLOUD",
-    desc: "Meta Llama 3.3 70B Instruct (OpenRouter Free Tier)",
-    icon: "bolt",
+    id: "openrouter/liquid-lfm",
+    name: "Liquid LFM 2.5",
+    badge: "FAST INDIC",
+    desc: "Liquid AI LFM 2.5 (High Speed / Zero Scratchpad)",
+    icon: "water_drop",
   },
   {
-    id: "openrouter/gemini-2.0-flash",
-    name: "Gemini 2.0 Flash",
+    id: "openrouter/qwen-3.8-27b",
+    name: "Qwen 3.8 27B",
     badge: "FREE CLOUD",
-    desc: "Google Gemini 2.0 Flash Experimental (Free Tier)",
+    desc: "Alibaba Qwen 3.8 27B (OpenRouter Free Tier)",
+    icon: "public",
+  },
+  {
+    id: "openrouter/gemma-4-31b",
+    name: "Gemma 4 31B",
+    badge: "FREE CLOUD",
+    desc: "Google Gemma 4 31B Instruct (OpenRouter Free Tier)",
     icon: "auto_awesome",
   },
   {
-    id: "openrouter/qwen-2.5-72b",
-    name: "Qwen 2.5 72B",
+    id: "openrouter/nemotron-3.5",
+    name: "Nemotron 3.5",
     badge: "FREE CLOUD",
-    desc: "Alibaba Qwen 2.5 72B Instruct (OpenRouter Free Tier)",
-    icon: "public",
+    desc: "NVIDIA Nemotron 3.5 Lightning (OpenRouter Free Tier)",
+    icon: "bolt",
   },
   {
     id: "ollama/local",
@@ -102,6 +58,13 @@ const AI_MODELS: AIModelOption[] = [
     badge: "OFFLINE",
     desc: "Offline localhost:11434 (llama3.2 / 0 cost)",
     icon: "terminal",
+  },
+  {
+    id: "ollama/qwen2.5:7b",
+    name: "Qwen 2.5 7B",
+    badge: "FAST INDIC",
+    desc: "Offline localhost:11434 (Native Devanagari / High Speed)",
+    icon: "speed",
   },
   {
     id: "deterministic",
@@ -112,24 +75,7 @@ const AI_MODELS: AIModelOption[] = [
   },
 ];
 
-const LANGUAGES = [
-  { code: "en", label: "EN", name: "English" },
-  { code: "hi", label: "हिंदी", name: "Hindi" },
-  { code: "mr", label: "मराठी", name: "Marathi" },
-  { code: "gu", label: "ગુજરાતી", name: "Gujarati" },
-  { code: "or", label: "ଓଡ଼ିଆ", name: "Odia" },
-  { code: "ta", label: "தமிழ்", name: "Tamil" },
-];
-
 const languages = LANGUAGES.map((l) => l.label);
-
-const suggestionChips = [
-  "Is it safe to swim at Puri Beach today?",
-  "Can we take a small motorboat out near Paradip Port fairway right now?",
-  "I want to go coastal sightseeing and visit ancient monuments around Konark.",
-  "Why is boating unsuitable in rough sea conditions?",
-  "Can mechanised trawlers venture 15 nautical miles off Gopalpur tonight?",
-];
 
 const NODE_META: Record<string, { label: string; icon: string }> = {
   planner: { label: "Planner", icon: "alt_route" },
@@ -141,110 +87,81 @@ const NODE_META: Record<string, { label: string; icon: string }> = {
   recommendation: { label: "Recommendation", icon: "psychology" },
 };
 
-const INITIAL_SEED_MESSAGES: ChatMessage[] = [
-  {
-    id: "initial-user",
-    role: "user",
-    content: "Can mechanised trawlers venture 15 nautical miles off Gopalpur after 18:00 IST tonight?",
-    timestamp: "14:32 IST",
-  },
-  {
-    id: "initial-assistant",
-    role: "assistant",
-    content:
-      "**Fisherfolk Marine Safety Telemetry — Gopalpur Sector**\n\n" +
-      "• **Verdict**: **CAUTION**\n" +
-      "• **Significant Wave Height**: 2.8m (Squall surge expected after 21:00)\n" +
-      "• **Surface Wind**: 22.0 km/h (SSW, gusts to 30 kts)\n" +
-      "• **Atmospheric Temp**: 28.5°C\n\n" +
-      "**Operational Directive**: Inshore (< 5 NM) operations allowed until 20:00 IST with NavIC transponder active. Deep-sea trawlers must travel in buddy pairs and return before squall surge at 22:00 IST.",
-    timestamp: "14:32 IST",
-    activeNodes: ["planner", "weather", "ocean", "gis", "advisory_rag", "risk_and_suitability", "recommendation"],
-    activitySuitability: {
-      activity: "trawler_venture",
-      suitability: "MODERATE",
-      score: 65,
-      factors: [
-        {
-          factor: "Significant Wave Height",
-          value: "2.8m",
-          impact: "critical",
-          reason: "Wave height 2.8m exceeds calm limit of 2.0m for inshore trawling.",
-        },
-        {
-          factor: "Sustained Wind Speed",
-          value: "22.0 km/h",
-          impact: "warning",
-          reason: "Moderate breeze with anticipated night gusts.",
-        },
-      ],
-      reasons: ["Wave height 2.8m requires caution", "Squall surge expected after 21:00 IST"],
-      best_time_window: "06:00 – 18:00 IST (Return before 20:00 squall window)",
-      summary: "Suitability rated MODERATE (65/100). Inshore operations permissible before evening squall.",
-    },
-    riskResult: {
-      level: "moderate",
-      score: 35,
-      factors: [],
-      warnings: ["Squall surge expected after 21:00 IST: Inshore vessels must return by 20:00 IST."],
-    },
-    metrics: {
-      wave_height_m: 2.8,
-      wind_speed_kmh: 22.0,
-      wind_direction_deg: 210,
-      temperature_c: 28.5,
-      weather_description: "Squall warning",
-    },
-    dataSource: {
-      name: "Open-Meteo Marine & Weather API",
-      type: "weather",
-      reliability: "LIVE",
-      timestamp: "2026-09-04T08:00:00Z",
-      attribution: "Open-Meteo Global Marine & Weather Models (CC-BY 4.0)",
-    },
-    sourcesList: [
-      {
-        name: "Open-Meteo Weather API",
-        type: "weather",
-        reliability: "LIVE",
-        timestamp: "2026-09-04T08:00:00Z",
-        attribution: "Open-Meteo ECMWF / GFS Global Models",
-      },
-      {
-        name: "Open-Meteo Marine API",
-        type: "ocean",
-        reliability: "LIVE",
-        timestamp: "2026-09-04T08:00:00Z",
-        attribution: "Copernicus Marine Wave Model via Open-Meteo",
-      },
-      {
-        name: "INCOIS Coastal Hazard & Navigation DB",
-        type: "advisory",
-        reliability: "LIVE",
-        timestamp: "2026-09-04T08:00:00Z",
-        attribution: "Indian National Centre for Ocean Information Services",
-      },
-    ],
-    safetyVerdict: "caution",
-    isLive: true,
-    modelUsed: "deterministic",
-  },
-];
-
-// In-memory module cache: preserves conversation seamlessly during client-side SPA route transitions
-let memoryChatCache: ChatMessage[] | null = null;
-
 export default function ChatPage() {
-  const { role, homeRegion, getBearerToken } = useAuth();
-  const [currentLangIdx, setCurrentLangIdx] = useState<number>(0);
-  const [selectedModel, setSelectedModel] = useState<string>("auto");
+  const { role, selectInitialRole, isAdmin, setRoleAsAdmin } = useAuth();
+  const {
+    messages,
+    conversations,
+    activeConversationId,
+    isLoading,
+    isConversationsLoading,
+    activeSectorId,
+    activeRegion,
+    selectedModel,
+    currentLangIdx,
+    isDrawerOpen,
+    inputText,
+    setInputText,
+    setSelectedModel,
+    setActiveSectorId,
+    setCurrentLangIdx,
+    cycleLanguage,
+    setIsDrawerOpen,
+    toggleDrawer,
+    handleNewChat,
+    handleSelectConversation,
+    handleRenameConversation,
+    handleDeleteConversation,
+    handleSendMessage,
+    clearChatHistory,
+  } = useChat();
+
+  const currentLang = LANGUAGES[currentLangIdx] || LANGUAGES[0];
+  const activeLocale = SPEECH_LANG_MAP[currentLang.code] || "en-IN";
+
+  const initialInputPrefixRef = useRef("");
+
+  const {
+    isListening,
+    isSupported: isSpeechSupported,
+    errorMessage: speechError,
+    clearError: clearSpeechError,
+    toggleListening: originalToggleListening,
+    stopListening: originalStopListening,
+  } = useSpeechRecognition({
+    languageLocale: activeLocale,
+    onTranscript: (transcript) => {
+      if (!isLoading) {
+        const prefix = initialInputPrefixRef.current;
+        setInputText(prefix ? `${prefix}${transcript}` : transcript);
+      }
+    },
+  });
+
+  const stopListening = () => {
+    initialInputPrefixRef.current = "";
+    originalStopListening();
+  };
+
+  const toggleListening = (locale?: string) => {
+    if (!isListening) {
+      initialInputPrefixRef.current = inputText.trim() ? `${inputText.trim()} ` : "";
+    } else {
+      initialInputPrefixRef.current = "";
+    }
+    originalToggleListening(locale);
+  };
+
+  // If user switches language while mic is listening, cleanly stop listening
+  useEffect(() => {
+    if (isListening) {
+      stopListening();
+    }
+  }, [currentLangIdx]);
+
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState<boolean>(false);
-  const [activeSectorId, setActiveSectorId] = useState<string>("odisha");
   const [isSectorDropdownOpen, setIsSectorDropdownOpen] = useState<boolean>(false);
-  const [inputText, setInputText] = useState<string>("");
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [messages, setMessages] = useState<ChatMessage[]>(() => memoryChatCache || INITIAL_SEED_MESSAGES);
-  const isLoadedRef = useRef<boolean>(!!memoryChatCache);
+  const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState<boolean>(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom of conversation whenever messages update
@@ -252,528 +169,41 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  // Restore chat history, selected model, and active sector from localStorage on mount
-  useEffect(() => {
-    try {
-      const savedModel = localStorage.getItem("orca_selected_model");
-      if (savedModel) setSelectedModel(savedModel);
-    } catch (e) {
-      console.warn("Could not load stored model choice", e);
+  // Dynamic Role-Adaptive & Region-Aware Recommendations
+  const dynamicSuggestions = useMemo(() => {
+    const langCode = LANGUAGES[currentLangIdx]?.code || "en";
+    return getDynamicRecommendations(role as UserRole, activeRegion, langCode);
+  }, [role, activeRegion, currentLangIdx]);
+
+  // Dynamic role-attuned composer placeholder (shows listening feedback when mic active)
+  const inputPlaceholder = useMemo(() => {
+    if (isListening) {
+      return `🎙️ Listening in ${currentLang.name} (${currentLang.label})... Speak your query`;
     }
-
-    try {
-      const savedLang = localStorage.getItem("orca_selected_language");
-      if (savedLang) {
-        const langIdx = LANGUAGES.findIndex((l) => l.code === savedLang);
-        if (langIdx !== -1) setCurrentLangIdx(langIdx);
-      }
-    } catch (e) {
-      console.warn("Could not load stored language choice", e);
+    switch (role) {
+      case "fisher":
+        return "Ask ORCA about sea-state, PFZ zones, or trawler safety...";
+      case "researcher":
+        return "Ask ORCA about SST gradients, chlorophyll trends, or wave spectra...";
+      case "tourist":
+        return "Ask ORCA about beach swimming safety, sightseeing, or tides...";
+      case "authority":
+        return "Ask ORCA about port signals, fairway traffic, or SAR conditions...";
+      case "disaster_management":
+        return "Ask ORCA about cyclone surge, gust indices, or evacuation readiness...";
+      default:
+        return "Ask ORCA about sea-state, swimming safety, or wind conditions...";
     }
-
-    const syncSector = () => {
-      try {
-        const savedSector = localStorage.getItem("orca_selected_sector");
-        if (savedSector && COASTAL_REGIONS.some((r) => r.id === savedSector)) {
-          setActiveSectorId(savedSector);
-        }
-      } catch (e) {
-        console.warn("Could not load stored sector choice", e);
-      }
-    };
-    syncSector();
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "orca_selected_sector" && e.newValue) {
-        if (COASTAL_REGIONS.some((r) => r.id === e.newValue)) {
-          setActiveSectorId(e.newValue);
-        }
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("focus", syncSector);
-
-    if (!memoryChatCache) {
-      try {
-        const saved = localStorage.getItem("orca_chat_history");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            memoryChatCache = parsed;
-            setMessages(parsed);
-          }
-        }
-      } catch (e) {
-        console.warn("Could not load stored chat history", e);
-      }
-    }
-    isLoadedRef.current = true;
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("focus", syncSector);
-    };
-  }, []);
-
-  const activeRegion: CoastalRegion =
-    COASTAL_REGIONS.find((r) => r.id === activeSectorId) || COASTAL_REGIONS[0];
+  }, [role, isListening, currentLang]);
 
   const handleSelectSector = (secId: string) => {
     setActiveSectorId(secId);
     setIsSectorDropdownOpen(false);
-    try {
-      localStorage.setItem("orca_selected_sector", secId);
-      window.dispatchEvent(new Event("storage"));
-    } catch (e) {
-      console.warn("Could not persist sector choice", e);
-    }
   };
 
   const handleSelectModel = (modelId: string) => {
     setSelectedModel(modelId);
     setIsModelDropdownOpen(false);
-    try {
-      localStorage.setItem("orca_selected_model", modelId);
-    } catch (e) {
-      console.warn("Could not persist model choice", e);
-    }
-  };
-
-  // Chat History Drawer State
-  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
-  const [activeConversationId, setActiveConversationId] = useState<string>("default-conv");
-  const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [isConversationsLoading, setIsConversationsLoading] = useState<boolean>(false);
-
-  // Responsive default: start collapsed on mobile screens, restore last active conversation
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      if (window.innerWidth < 768) {
-        setIsDrawerOpen(false);
-      }
-      try {
-        const savedDrawerState = localStorage.getItem("orca_chat_drawer_open");
-        if (savedDrawerState !== null) {
-          setIsDrawerOpen(savedDrawerState === "true");
-        }
-        const savedActiveConv = localStorage.getItem("orca_active_conv_id");
-        if (savedActiveConv) {
-          setActiveConversationId(savedActiveConv);
-        }
-      } catch (e) {
-        console.warn("Could not read drawer storage", e);
-      }
-    }
-  }, []);
-
-  const toggleDrawer = () => {
-    setIsDrawerOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("orca_chat_drawer_open", String(next));
-      } catch (e) {}
-      return next;
-    });
-  };
-
-  // Fetch or restore conversations list
-  const loadConversations = async () => {
-    setIsConversationsLoading(true);
-    let localList: ConversationItem[] = [];
-    try {
-      const saved = localStorage.getItem("orca_conversations_v1");
-      if (saved) {
-        localList = JSON.parse(saved);
-      }
-    } catch (e) {}
-
-    try {
-      const token = getBearerToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE_URL}/chat/conversations`, { headers });
-      if (res.ok) {
-        const remoteList: ConversationItem[] = await res.json();
-        // Merge remote and local without duplicates
-        const map = new Map<string, ConversationItem>();
-        remoteList.forEach((c) => map.set(c.id, c));
-        localList.forEach((c) => {
-          if (!map.has(c.id)) map.set(c.id, c);
-        });
-        const merged = Array.from(map.values()).sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-        setConversations(merged);
-        try {
-          localStorage.setItem("orca_conversations_v1", JSON.stringify(merged));
-        } catch (e) {}
-        setIsConversationsLoading(false);
-        return;
-      }
-    } catch (e) {
-      console.warn("Could not fetch remote conversations, using local fallback", e);
-    }
-
-    if (localList.length === 0) {
-      // Seed default initial conversation
-      const seedConv: ConversationItem = {
-        id: "default-conv",
-        title: "Fisherfolk Telemetry — Gopalpur",
-        created_at: new Date().toISOString(),
-        message_count: 2,
-        last_message: "Can mechanised trawlers venture 15 nautical miles off Gopalpur?",
-      };
-      localList = [seedConv];
-      try {
-        localStorage.setItem("orca_conversations_v1", JSON.stringify(localList));
-      } catch (e) {}
-    }
-    setConversations(localList);
-    setIsConversationsLoading(false);
-  };
-
-  useEffect(() => {
-    loadConversations();
-  }, []);
-
-  const handleNewChat = () => {
-    const newId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    setActiveConversationId(newId);
-    try {
-      localStorage.setItem("orca_active_conv_id", newId);
-    } catch (e) {}
-
-    const welcomeMsg: ChatMessage = {
-      id: `welcome-${Date.now()}`,
-      role: "assistant",
-      content: `🌊 **ORCA Marine Advisory Ready — ${activeRegion.name}**\n\nLive telemetry connected for **${activeRegion.name}** (${activeRegion.center[0].toFixed(2)}°N, ${activeRegion.center[1].toFixed(2)}°E).\n\nAsk about sea state, wave heights, fishing zones, or coastal tourism safety.`,
-      timestamp: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
-      safetyVerdict: "safe",
-      isLive: true,
-      modelUsed: selectedModel,
-    };
-    const freshMessages = [welcomeMsg];
-    setMessages(freshMessages);
-    memoryChatCache = freshMessages;
-
-    const newConv: ConversationItem = {
-      id: newId,
-      title: `Advisory — ${activeRegion.name}`,
-      created_at: new Date().toISOString(),
-      message_count: 1,
-      last_message: welcomeMsg.content.slice(0, 60),
-    };
-
-    setConversations((prev) => [newConv, ...prev]);
-    try {
-      localStorage.setItem(`orca_conv_${newId}`, JSON.stringify(freshMessages));
-      const savedList: ConversationItem[] = JSON.parse(
-        localStorage.getItem("orca_conversations_v1") || "[]"
-      );
-      localStorage.setItem(
-        "orca_conversations_v1",
-        JSON.stringify([newConv, ...savedList.filter((c) => c.id !== newId)])
-      );
-    } catch (e) {}
-  };
-
-  const handleSelectConversation = async (convId: string) => {
-    setActiveConversationId(convId);
-    try {
-      localStorage.setItem("orca_active_conv_id", convId);
-    } catch (e) {}
-
-    // First check local cache
-    try {
-      const cached = localStorage.getItem(`orca_conv_${convId}`);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setMessages(parsed);
-          memoryChatCache = parsed;
-        }
-      }
-    } catch (e) {}
-
-    // Fetch from backend
-    try {
-      const token = getBearerToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE_URL}/chat/conversations/${convId}`, { headers });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.messages && data.messages.length > 0) {
-          const loaded: ChatMessage[] = data.messages.map((m: any) => ({
-            id: String(m.id),
-            role: m.role,
-            content: m.content,
-            timestamp: new Date(m.created_at).toLocaleTimeString("en-IN", {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-            metrics: m.metadata?.metrics,
-            dataSource: m.metadata?.data_source,
-            safetyVerdict: m.metadata?.safety_verdict || "unknown",
-            isLive: m.metadata?.is_live ?? true,
-            activeNodes: m.metadata?.active_nodes,
-            activitySuitability: m.metadata?.activity_suitability,
-            riskResult: m.metadata?.risk_result,
-            sourcesList: m.metadata?.sources,
-            modelUsed: m.metadata?.model_used || "deterministic",
-          }));
-          setMessages(loaded);
-          memoryChatCache = loaded;
-          try {
-            localStorage.setItem(`orca_conv_${convId}`, JSON.stringify(loaded));
-          } catch (e) {}
-        }
-      }
-    } catch (err) {
-      console.warn("Backend conversation fetch failed, using local cache:", err);
-    }
-  };
-
-  const handleRenameConversation = async (convId: string, newTitle: string) => {
-    setConversations((prev) =>
-      prev.map((c) => (c.id === convId ? { ...c, title: newTitle } : c))
-    );
-    try {
-      const savedList: ConversationItem[] = JSON.parse(
-        localStorage.getItem("orca_conversations_v1") || "[]"
-      );
-      const updated = savedList.map((c) => (c.id === convId ? { ...c, title: newTitle } : c));
-      localStorage.setItem("orca_conversations_v1", JSON.stringify(updated));
-    } catch (e) {}
-
-    try {
-      const token = getBearerToken();
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      await fetch(`${API_BASE_URL}/chat/conversations/${convId}`, {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({ title: newTitle }),
-      });
-    } catch (e) {
-      console.warn("Backend rename failed:", e);
-    }
-  };
-
-  const handleDeleteConversation = async (convId: string) => {
-    setConversations((prev) => prev.filter((c) => c.id !== convId));
-    try {
-      localStorage.removeItem(`orca_conv_${convId}`);
-      const savedList: ConversationItem[] = JSON.parse(
-        localStorage.getItem("orca_conversations_v1") || "[]"
-      );
-      localStorage.setItem(
-        "orca_conversations_v1",
-        JSON.stringify(savedList.filter((c) => c.id !== convId))
-      );
-    } catch (e) {}
-
-    try {
-      const token = getBearerToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      await fetch(`${API_BASE_URL}/chat/conversations/${convId}`, {
-        method: "DELETE",
-        headers,
-      });
-    } catch (e) {
-      console.warn("Backend delete failed:", e);
-    }
-
-    if (convId === activeConversationId) {
-      handleNewChat();
-    }
-  };
-
-  // Persist chat history to localStorage and memory cache on update
-  // CRITICAL: isLoadedRef prevents overwriting saved history on initial mount
-  useEffect(() => {
-    if (!isLoadedRef.current) return;
-    memoryChatCache = messages;
-    try {
-      localStorage.setItem("orca_chat_history", JSON.stringify(messages));
-      localStorage.setItem(`orca_conv_${activeConversationId}`, JSON.stringify(messages));
-    } catch (e) {
-      console.warn("Could not persist chat history", e);
-    }
-  }, [messages, activeConversationId]);
-
-  const clearChatHistory = () => {
-    handleNewChat();
-  };
-
-  const cycleLanguage = () => {
-    setCurrentLangIdx((prev) => {
-      const next = (prev + 1) % LANGUAGES.length;
-      try {
-        localStorage.setItem("orca_selected_language", LANGUAGES[next].code);
-      } catch (e) {
-        console.warn("Could not save language choice", e);
-      }
-      return next;
-    });
-  };
-
-  const handleSendMessage = async (queryText?: string) => {
-    const textToSend = queryText || inputText;
-    if (!textToSend.trim() || isLoading) return;
-
-    const userMsgId = `user-${Date.now()}`;
-    const userMsg: ChatMessage = {
-      id: userMsgId,
-      role: "user",
-      content: textToSend.trim(),
-      timestamp: new Date().toLocaleTimeString("en-IN", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    };
-
-    const currentConvId = activeConversationId;
-    const updatedMessages = [...messages, userMsg];
-    setMessages(updatedMessages);
-    setInputText("");
-    setIsLoading(true);
-
-    try {
-      const token = getBearerToken();
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      } else {
-        // Provide demo test token if user is in unauthenticated client mode
-        headers["Authorization"] = "Bearer demo_client_guest_token";
-      }
-
-      const response = await fetch(`${API_BASE_URL}/chat`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          query: textToSend.trim(),
-          conversation_id: currentConvId,
-          latitude: activeRegion.center[0],
-          longitude: activeRegion.center[1],
-          region_name: activeRegion.name,
-          selected_model: selectedModel,
-          language: LANGUAGES[currentLangIdx]?.code || "en",
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`API responded with status ${response.status}`);
-      }
-
-      const data = await response.json();
-      const assistantMsg: ChatMessage = {
-        id: `asst-${Date.now()}`,
-        role: "assistant",
-        content: data.reply,
-        timestamp: new Date().toLocaleTimeString("en-IN", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        metrics: data.metrics || undefined,
-        dataSource: data.data_source
-          ? {
-              name: data.data_source.name,
-              type: data.data_source.type,
-              reliability: (data.data_source.reliability?.toUpperCase() as any) || "DEMO",
-              timestamp: data.data_source.timestamp,
-              attribution: data.data_source.attribution,
-            }
-          : undefined,
-        safetyVerdict: (data.safety_verdict as any) || "unknown",
-        isLive: data.is_live,
-        activeNodes: data.active_nodes || undefined,
-        activitySuitability: data.activity_suitability || undefined,
-        riskResult: data.risk_result || undefined,
-        sourcesList: data.sources || undefined,
-        modelUsed: data.model_used || "deterministic",
-      };
-
-      const finalMessages = [...updatedMessages, assistantMsg];
-      setMessages(finalMessages);
-      memoryChatCache = finalMessages;
-
-      // Update active conversation in drawer
-      setConversations((prev) => {
-        let found = false;
-        const updated = prev.map((c) => {
-          if (c.id === currentConvId) {
-            found = true;
-            const newTitle =
-              c.title.startsWith("New Marine Chat") || c.title.startsWith("Advisory —")
-                ? textToSend.slice(0, 36) + (textToSend.length > 36 ? "..." : "")
-                : c.title;
-            return {
-              ...c,
-              title: newTitle,
-              message_count: finalMessages.length,
-              last_message: assistantMsg.content.slice(0, 80),
-            };
-          }
-          return c;
-        });
-
-        if (!found) {
-          const newTitle = textToSend.slice(0, 36) + (textToSend.length > 36 ? "..." : "");
-          updated.unshift({
-            id: currentConvId,
-            title: newTitle,
-            created_at: new Date().toISOString(),
-            message_count: finalMessages.length,
-            last_message: assistantMsg.content.slice(0, 80),
-          });
-        }
-
-        try {
-          localStorage.setItem("orca_conversations_v1", JSON.stringify(updated));
-          localStorage.setItem(`orca_conv_${currentConvId}`, JSON.stringify(finalMessages));
-        } catch (e) {}
-
-        return updated;
-      });
-    } catch (err: any) {
-      console.warn("Error calling /chat endpoint:", err);
-      // Data honesty: report connection/API error without making up fake metrics
-      const errorMsg: ChatMessage = {
-        id: `err-${Date.now()}`,
-        role: "assistant",
-        content:
-          `**ORCA Advisory Connection Notice**\n\n` +
-          `Could not connect to the ORCA FastAPI backend at \`${API_BASE_URL}/chat\`. ` +
-          `*(Error: ${err.message || "Network error"})*\n\n` +
-          `**Data Honesty Policy (PRD §8)**: In adherence to mission safety standards, ` +
-          `we never fabricate wave heights or sea conditions. ` +
-          `Ensure the FastAPI backend is running on \`http://localhost:8000\` (` +
-          `\`uvicorn app.main:app --port 8000\`).`,
-        timestamp: new Date().toLocaleTimeString("en-IN", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        dataSource: {
-          name: "Local Service Healthcheck",
-          type: "advisory",
-          reliability: "DEMO",
-          timestamp: new Date().toISOString(),
-          attribution: "Zero fabricated numbers policy",
-        },
-        safetyVerdict: "unknown",
-        isLive: false,
-        modelUsed: "deterministic",
-      };
-      setMessages((prev) => [...prev, errorMsg]);
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   useEffect(() => {
@@ -942,12 +372,88 @@ export default function ChatPage() {
           </div>
 
           <div className="flex items-center justify-between text-label-sm font-label-sm text-on-surface-variant font-mono">
-            <div className="flex items-center gap-1">
-              <span className="material-symbols-outlined text-[14px] text-secondary">
-                satellite_alt
-              </span>
-              <span className="truncate">Active Role: <strong className="text-primary uppercase">{role}</strong></span>
+            {/* Interactive Role Switcher */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded-md hover:bg-surface-container transition-colors border border-transparent hover:border-surface-container-high group"
+                title="Click to switch active role and update dynamic recommendations"
+              >
+                <span className="material-symbols-outlined text-[14px] text-secondary group-hover:text-primary transition-colors">
+                  {ROLE_DETAILS[role as UserRole]?.icon || "badge"}
+                </span>
+                <span className="truncate text-xs text-on-surface-variant">
+                  Role: <strong className="text-primary uppercase font-bold">{ROLE_DETAILS[role as UserRole]?.label || role}</strong>
+                </span>
+                <span className="material-symbols-outlined text-[12px] text-on-surface-variant/70 leading-none">
+                  arrow_drop_down
+                </span>
+              </button>
+
+              {isRoleDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsRoleDropdownOpen(false)}
+                  />
+                  <div className="absolute left-0 top-full mt-1.5 z-50 w-64 bg-surface-container-highest border border-outline/20 rounded-xl shadow-2xl p-1.5 flex flex-col gap-1 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100">
+                    <div className="text-[10px] font-mono uppercase font-bold text-on-surface-variant px-2.5 py-1 tracking-wider border-b border-surface-container">
+                      Switch Role (Dynamic Suggestions)
+                    </div>
+                    {(Object.keys(ROLE_DETAILS) as UserRole[]).map((rKey) => {
+                      const rInfo = ROLE_DETAILS[rKey];
+                      const isSelected = rKey === role;
+                      return (
+                        <button
+                          key={rKey}
+                          type="button"
+                          onClick={() => {
+                            if (isAdmin) {
+                              setRoleAsAdmin(rKey);
+                            } else {
+                              selectInitialRole(rKey);
+                            }
+                            setIsRoleDropdownOpen(false);
+                          }}
+                          className={`flex items-start gap-2 p-2 rounded-lg text-left transition-all ${
+                            isSelected
+                              ? "bg-primary-container/30 border border-primary/30"
+                              : "hover:bg-surface-container-high/60 border border-transparent"
+                          }`}
+                        >
+                          <span
+                            className={`material-symbols-outlined text-[16px] leading-none mt-0.5 shrink-0 ${
+                              isSelected ? "text-primary font-bold" : "text-on-surface-variant"
+                            }`}
+                          >
+                            {rInfo.icon}
+                          </span>
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-xs font-semibold leading-tight ${
+                                  isSelected ? "text-primary" : "text-on-surface"
+                                }`}
+                              >
+                                {rInfo.label}
+                              </span>
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-surface-container text-on-surface-variant font-mono">
+                                {rInfo.badge}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-on-surface-variant line-clamp-1 mt-0.5">
+                              {rInfo.desc}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
+
             <span className="text-label-sm font-label-sm text-secondary font-semibold bg-secondary-fixed/50 px-1.5 py-0.5 rounded">
               OPEN-METEO LIVE
             </span>
@@ -955,13 +461,62 @@ export default function ChatPage() {
         </div>
       </section>
 
+      {/* Official INCOIS / IMD Marine Broadcast Primacy Disclaimer (PRD §8) */}
+      <aside
+        aria-label="Official maritime broadcast priority notice"
+        className="bg-amber-500/10 border-b border-amber-500/20 px-margin-mobile md:px-margin-desktop py-1.5 flex items-center justify-between text-[11px] font-mono text-amber-900 shrink-0"
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="material-symbols-outlined text-[15px] text-amber-700 shrink-0">emergency</span>
+          <span className="truncate">
+            <strong>OFFICIAL NOTICE:</strong> AI advisory tool. Mariners must prioritize official INCOIS, IMD & Coast Guard alerts (VHF Ch 16).
+          </span>
+        </div>
+        <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-900 text-[10px] font-bold uppercase shrink-0 ml-2">
+          PRD §8
+        </span>
+      </aside>
+
       {/* Main Conversational Stream - Fully Scrollable Messages Viewport */}
       <div
         id="chat-messages-scroll-area"
         className="flex-1 min-h-0 overflow-y-auto w-full overscroll-contain"
       >
-        <section className="px-margin-mobile md:px-margin-desktop py-space-md flex flex-col gap-space-lg max-w-3xl mx-auto w-full pb-4">
-        {messages.map((msg) => {
+        <section
+          className="px-margin-mobile md:px-margin-desktop py-space-md flex flex-col gap-space-lg max-w-3xl mx-auto w-full pb-4"
+          aria-live="polite"
+          aria-atomic="false"
+        >
+          {isConversationsLoading && messages.length === 0 ? (
+            <div className="flex flex-col gap-space-sm bg-surface-container-lowest rounded-xl p-space-md shadow-sm border border-surface-container animate-pulse">
+              <div className="flex items-center gap-space-xs min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center text-on-primary shrink-0">
+                  <span className="material-symbols-outlined text-[20px] text-secondary-fixed animate-spin">
+                    radar
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <h2 className="font-headline-sm text-headline-sm text-primary font-bold">
+                    ORCA Marine Intelligence Core
+                  </h2>
+                  <p className="font-label-sm text-label-sm text-secondary font-mono">
+                    Syncing live marine telemetry for {activeRegion.name}...
+                  </p>
+                </div>
+              </div>
+              <div className="p-space-sm rounded-lg bg-emerald-50 text-emerald-950 border border-emerald-200 flex items-center gap-2">
+                <span className="material-symbols-outlined text-[20px] text-emerald-700 animate-pulse">verified</span>
+                <span className="font-label-md text-label-md font-bold uppercase tracking-wider">
+                  OPTIMAL CONDITIONS · SAFE TO OPERATE
+                </span>
+              </div>
+              <div className="space-y-2 pt-2">
+                <div className="h-4 bg-surface-container rounded w-3/4"></div>
+                <div className="h-4 bg-surface-container rounded w-1/2"></div>
+              </div>
+            </div>
+          ) : (
+            messages.map((msg) => {
           if (msg.role === "user") {
             return (
               <div key={msg.id} className="flex flex-col items-end gap-1 pl-space-xl">
@@ -1338,8 +893,8 @@ export default function ChatPage() {
                 </div>
               ) : null}
             </article>
-          );
-        })}
+            );
+          }))}
 
         {/* Loading Spinner */}
         {isLoading && (
@@ -1368,12 +923,15 @@ export default function ChatPage() {
       {/* Docked Prompt Input Dock & Quick Chips */}
       <footer className="shrink-0 bg-surface/95 backdrop-blur-xl border-t border-surface-container p-3 z-20">
         <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
-          {/* Quick Suggestion Chips */}
+          {/* Quick Suggestion Chips (Role & Region Adaptive) */}
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-            {suggestionChips.map((chip, idx) => (
+            {dynamicSuggestions.map((chip, idx) => (
               <button
                 key={idx}
-                onClick={() => handleSendMessage(chip)}
+                onClick={() => {
+                  stopListening();
+                  handleSendMessage(chip);
+                }}
                 type="button"
                 className="whitespace-nowrap px-3 py-1 rounded-full bg-surface-container hover:bg-surface-container-high text-[11px] text-primary font-medium border border-surface-container transition-colors shrink-0"
               >
@@ -1382,10 +940,63 @@ export default function ChatPage() {
             ))}
           </div>
 
+          {/* Active Voice Input Feedback Banner */}
+          {isListening && (
+            <div
+              role="status"
+              aria-live="assertive"
+              className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-800 text-xs font-mono animate-in fade-in duration-200"
+            >
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-600" />
+                </span>
+                <span className="font-bold uppercase tracking-wider text-[11px]">
+                  Listening in {currentLang.name} ({currentLang.label})
+                </span>
+                <span className="text-[11px] text-on-surface-variant hidden sm:inline">
+                  — Speak clearly into microphone
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={stopListening}
+                aria-label="Stop speech recognition"
+                className="text-[10px] font-bold uppercase underline hover:text-rose-900 transition-colors"
+              >
+                Stop Listening
+              </button>
+            </div>
+          )}
+
+          {speechError && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-800 text-[11px] font-mono animate-in fade-in duration-200"
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="material-symbols-outlined text-[15px] text-amber-600 shrink-0">warning</span>
+                <span className="truncate">{speechError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={clearSpeechError}
+                aria-label="Dismiss error notice"
+                className="text-amber-800 hover:text-amber-950 text-xs px-1 font-bold shrink-0 ml-2"
+                title="Dismiss message"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Input Form */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              stopListening();
               handleSendMessage();
             }}
             className="flex items-center gap-2"
@@ -1394,16 +1005,24 @@ export default function ChatPage() {
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Ask ORCA about sea-state, swimming safety, or wind conditions..."
+              placeholder={inputPlaceholder}
               disabled={isLoading}
-              className="flex-1 px-4 py-2.5 rounded-full bg-surface-container-low border border-surface-container text-on-surface text-body-sm focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-outline"
+              aria-label="Marine advisory query input"
+              className={`flex-1 px-4 py-2.5 rounded-full bg-surface-container-low border text-on-surface text-body-sm focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-outline transition-all ${
+                isListening
+                  ? "border-rose-400 ring-2 ring-rose-400/30 bg-rose-50/15"
+                  : "border-surface-container"
+              }`}
             />
 
-            {/* AI Model Selector Dropdown — Placed right to the left of the send button */}
+            {/* AI Model Selector Dropdown — Placed right to the left of the mic button */}
             <div className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                aria-label="Select AI reasoning model"
+                aria-expanded={isModelDropdownOpen}
+                aria-haspopup="listbox"
                 className="flex items-center gap-1.5 h-10 px-3 rounded-full bg-surface-container-low hover:bg-surface-container border border-surface-container text-on-surface-variant text-xs font-mono transition-colors shadow-2xs"
                 id="model-selector-btn"
                 title="Choose AI Model & Engine (Free OpenRouter / Local Ollama)"
@@ -1477,10 +1096,52 @@ export default function ChatPage() {
               )}
             </div>
 
+            {/* Multilingual Voice Input Microphone Button */}
+            <button
+              type="button"
+              onClick={() => toggleListening(activeLocale)}
+              disabled={isLoading}
+              aria-label={
+                isListening
+                  ? `Stop voice recording in ${currentLang.name}`
+                  : `Start voice input in ${currentLang.name}`
+              }
+              className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-all relative ${
+                isListening
+                  ? "bg-rose-600 hover:bg-rose-700 text-white shadow-md ring-4 ring-rose-400/40 border border-rose-500 animate-pulse"
+                  : "bg-surface-container-low hover:bg-surface-container border border-surface-container text-on-surface-variant hover:text-primary shadow-2xs group"
+              } ${isLoading ? "opacity-50 cursor-not-allowed" : ""}`}
+              title={
+                !isSpeechSupported
+                  ? "Voice input is not supported in this browser (Use Chrome/Edge/Safari)"
+                  : isListening
+                  ? `Listening in ${currentLang.name}... Click to stop`
+                  : `Voice input in ${currentLang.name} (${currentLang.label})`
+              }
+              id="voice-mic-btn"
+            >
+              <span
+                className={`material-symbols-outlined text-[20px] transition-transform ${
+                  isListening ? "animate-bounce" : "group-hover:scale-110"
+                }`}
+              >
+                {isListening ? "graphic_eq" : "mic"}
+              </span>
+
+              {/* Live recording beacon indicator */}
+              {isListening && (
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500" />
+                </span>
+              )}
+            </button>
+
             <button
               type="submit"
               id="chat-send-btn"
               disabled={!inputText.trim() || isLoading}
+              aria-label="Send advisory query"
               className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center hover:bg-primary-container disabled:opacity-50 transition-colors shrink-0 shadow-sm"
               title="Send query"
             >

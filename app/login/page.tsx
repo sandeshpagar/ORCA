@@ -8,19 +8,23 @@ import { useAuth } from "@/contexts/AuthContext";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, loginWithGoogle, isLoggedIn } = useAuth();
+  const { login, loginWithGoogle, isLoggedIn, isAdmin } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // If already logged in, redirect to monitor
+  // If already logged in, redirect to admin if admin, else monitor
   useEffect(() => {
     if (isLoggedIn) {
-      router.replace("/monitor");
+      if (isAdmin) {
+        router.replace("/admin");
+      } else {
+        router.replace("/monitor");
+      }
     }
-  }, [isLoggedIn, router]);
+  }, [isLoggedIn, isAdmin, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,7 +45,11 @@ export default function LoginPage() {
     setIsSubmitting(false);
 
     if (result.success) {
-      router.push("/monitor");
+      if (email.trim().toLowerCase() === "admin@gmail.com") {
+        router.push("/admin");
+      } else {
+        router.push("/monitor");
+      }
     } else {
       setError(result.error || "Login failed. Please check your credentials.");
     }

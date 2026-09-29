@@ -8,6 +8,7 @@ from typing import Optional, List
 from app.auth.jwt import verify_supabase_jwt, JWTVerificationError
 from app.db.session import get_db
 from app.db.models import Profile, UserRoleEnum
+from app.config import settings
 
 security = HTTPBearer(auto_error=True)
 
@@ -18,6 +19,7 @@ class AuthenticatedUser(BaseModel):
     user_id: str
     email: Optional[str] = None
     role: UserRoleEnum  # DERIVED STRICTLY FROM DB PROFILES TABLE — NEVER TRUST CLIENT
+    is_admin: bool = False
     display_name: Optional[str] = None
     language: str = "en"
     home_region_lat: Optional[float] = 19.31
@@ -53,17 +55,23 @@ async def get_current_user(
             detail="Invalid JWT: missing user id claim.",
         )
 
+    # Derive is_admin securely from token claim or configured admin email
+    is_admin = bool(payload.get("is_admin")) or (
+        bool(email) and email.strip().lower() == settings.ADMIN_EMAIL.lower()
+    )
+
     # Query profiles table to derive the authoritative user role
     stmt = select(Profile).where(Profile.id == user_id)
     result = await db.execute(stmt)
     profile = result.scalar_one_or_none()
 
     if not profile:
-        # First-time user: create profile with initial default role 'general'
+        # First-time user: create profile with initial default role 'general' (or 'authority' if admin)
+        init_role = UserRoleEnum.AUTHORITY if is_admin else UserRoleEnum.GENERAL
         profile = Profile(
             id=user_id,
-            display_name=email.split("@")[0] if email else "Officer",
-            role=UserRoleEnum.GENERAL,
+            display_name=email.split("@")[0] if email else ("Admin" if is_admin else "Officer"),
+            role=init_role,
             language="en",
             home_region_lat=19.31,
             home_region_lon=84.91,
@@ -77,12 +85,25 @@ async def get_current_user(
         user_id=profile.id,
         email=email,
         role=profile.role,  # Derived strictly from DB
+        is_admin=is_admin,
         display_name=profile.display_name,
         language=profile.language or "en",
         home_region_lat=profile.home_region_lat,
         home_region_lon=profile.home_region_lon,
         home_region_name=profile.home_region_name,
     )
+
+
+async def require_admin(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """Enforces that the authenticated user possesses Super Admin privileges."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Super Admin privileges required.",
+        )
+    return current_user
 
 
 def require_role(allowed_roles: List[UserRoleEnum]):

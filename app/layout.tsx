@@ -16,9 +16,33 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ORCA · ISRO Marine AI & Coastal Safety",
+  title: {
+    default: "ORCA · ISRO Marine AI & Coastal Safety",
+    template: "%s · ORCA Marine AI",
+  },
   description:
-    "Institutional visual foundations engineered for Indian coastal safety, automated fisherfolk advisories, and mission-critical satellite oceanographic intelligence.",
+    "Mission-critical Indian coastal safety intelligence grid, automated multilingual fisherfolk advisories, and satellite oceanographic analytics.",
+  keywords: [
+    "ORCA",
+    "ISRO",
+    "INCOIS",
+    "Marine AI",
+    "Coastal Safety",
+    "Oceanography",
+    "Fisherfolk Advisory",
+    "Wave Heights",
+    "High Wave Alert",
+  ],
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+  openGraph: {
+    title: "ORCA · ISRO Marine AI & Coastal Safety Grid",
+    description:
+      "Mission-critical coastal safety intelligence, real-time wave/ocean metrics, and automated vernacular advisories for Indian mariners.",
+    type: "website",
+  },
 };
 
 export const viewport: Viewport = {
@@ -40,6 +64,10 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+          rel="stylesheet"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&family=Noto+Sans+Gujarati:wght@400;500;600;700&family=Noto+Sans+Oriya:wght@400;500;600;700&family=Noto+Sans+Tamil:wght@400;500;600;700&family=Noto+Sans+Telugu:wght@400;500;600;700&display=swap"
           rel="stylesheet"
         />
       </head>

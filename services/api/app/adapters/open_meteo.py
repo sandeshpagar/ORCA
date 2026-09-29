@@ -2,8 +2,12 @@ import asyncio
 import httpx
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+import logging
 from app.config import settings
 from app.schemas.chat import MarineMetrics, DataSourceInfo
+from app.adapters.cache import telemetry_cache
+
+logger = logging.getLogger(__name__)
 
 
 class OpenMeteoError(Exception):
@@ -40,9 +44,17 @@ async def fetch_open_meteo_marine_data(
 ) -> Dict[str, Any]:
     """
     Fetches real-time marine and meteorological observation from Open-Meteo APIs.
-    Per docs/01_PRD.md §8: Returns honest LIVE data with attribution, or raises
-    an explicit error on failure — NEVER invents or fabricates fake measurements.
+    Per docs/01_PRD.md §8: Returns honest LIVE data with attribution, or serves
+    stale cached telemetry with explicit CACHED label, or raises OpenMeteoError
+    if no cache exists — NEVER invents or fabricates fake measurements.
     """
+    cache_key = f"{round(latitude, 2)}:{round(longitude, 2)}"
+
+    # 1. Fresh cache check
+    fresh_entry = telemetry_cache.get(cache_key)
+    if fresh_entry is not None:
+        return fresh_entry
+
     weather_url = "https://api.open-meteo.com/v1/forecast"
     weather_params = {
         "latitude": latitude,
@@ -59,7 +71,7 @@ async def fetch_open_meteo_marine_data(
 
     should_close_client = False
     if client is None:
-        client = httpx.AsyncClient(timeout=8.0)
+        client = httpx.AsyncClient(timeout=settings.OPEN_METEO_TIMEOUT_SECONDS)
         should_close_client = True
 
     try:
@@ -71,24 +83,32 @@ async def fetch_open_meteo_marine_data(
             raise OpenMeteoError(f"Open-Meteo Weather API request failed: {weather_resp}") from weather_resp
 
         weather_resp.raise_for_status()
-        weather_data = weather_resp.json()
+        try:
+            weather_data = weather_resp.json()
+        except Exception as json_err:
+            raise OpenMeteoError(f"Open-Meteo malformed weather JSON: {json_err}") from json_err
+
+        if not isinstance(weather_data, dict):
+            raise OpenMeteoError("Open-Meteo returned invalid weather payload structure")
 
         marine_data = {}
-        if not isinstance(marine_resp_result, Exception) and marine_resp_result.status_code == 200:
+        if not isinstance(marine_resp_result, Exception) and hasattr(marine_resp_result, "status_code") and marine_resp_result.status_code == 200:
             try:
-                marine_data = marine_resp_result.json()
+                m_json = marine_resp_result.json()
+                if isinstance(m_json, dict):
+                    marine_data = m_json
             except Exception:
                 pass
 
         # Parse observations
-        current_weather = weather_data.get("current", {})
+        current_weather = weather_data.get("current", {}) or {}
         temp = current_weather.get("temperature_2m")
         wind_speed = current_weather.get("wind_speed_10m")
         wind_dir = current_weather.get("wind_direction_10m")
         wcode = current_weather.get("weather_code", 0)
         weather_desc = WEATHER_CODES.get(wcode, f"Weather Code {wcode}")
 
-        current_marine = marine_data.get("current", {})
+        current_marine = marine_data.get("current", {}) or {}
         wave_height = current_marine.get("wave_height")
         wave_period = current_marine.get("wave_period")
 
@@ -111,18 +131,43 @@ async def fetch_open_meteo_marine_data(
             attribution="Open-Meteo Global Marine & Weather Models (CC-BY 4.0)",
         )
 
-        return {
+        live_result = {
             "metrics": metrics,
             "data_source": data_source,
             "is_live": True,
         }
 
-    except httpx.HTTPStatusError as e:
-        raise OpenMeteoError(f"Open-Meteo API HTTP error {e.response.status_code}: {e.response.text}") from e
-    except httpx.RequestError as e:
-        raise OpenMeteoError(f"Open-Meteo API connection failed: {str(e)}") from e
-    except Exception as e:
-        raise OpenMeteoError(f"Failed to retrieve marine observation: {str(e)}") from e
+        # Store in bounded TTL cache
+        telemetry_cache.set(cache_key, live_result, ttl=900.0)
+        return live_result
+
+    except Exception as upstream_err:
+        logger.warning("Upstream Open-Meteo query failed for (%s, %s): %s", latitude, longitude, upstream_err)
+
+        # 2. Check for stale cache fallback
+        stale_data, age_seconds = telemetry_cache.get_stale(cache_key)
+        if stale_data is not None:
+            age_mins = round(age_seconds / 60.0, 1)
+            orig_ds = stale_data["data_source"]
+            stale_ds = DataSourceInfo(
+                name=orig_ds.name,
+                type=orig_ds.type,
+                reliability="CACHED",
+                timestamp=orig_ds.timestamp,
+                attribution=f"Cached observation ({age_mins}m old); live sensor stream temporarily offline.",
+            )
+            return {
+                "metrics": stale_data["metrics"],
+                "data_source": stale_ds,
+                "is_live": False,
+            }
+
+        # 3. Honest failure if no cache exists
+        if isinstance(upstream_err, OpenMeteoError):
+            raise upstream_err
+        raise OpenMeteoError(f"Failed to retrieve marine observation: {str(upstream_err)}") from upstream_err
+
     finally:
         if should_close_client:
             await client.aclose()
+

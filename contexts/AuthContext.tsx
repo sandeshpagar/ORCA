@@ -22,11 +22,13 @@ export interface UserProfile {
   id: string;
   name: string;
   email: string;
+  isAdmin?: boolean;
 }
 
 interface AuthContextType {
   isLoggedIn: boolean;
   isLoading: boolean;
+  isAdmin: boolean;
   user: UserProfile | null;
   role: UserRole;
   token: string | null;
@@ -40,6 +42,7 @@ interface AuthContextType {
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   selectInitialRole: (role: UserRole) => Promise<boolean>;
+  setRoleAsAdmin: (role: UserRole) => void;
   saveTouristPreferences: (activities: string[], travelStyle?: string, lang?: string) => Promise<boolean>;
   setHomeRegion: (region: HomeRegion) => void;
   setLanguage: (lang: string) => void;
@@ -59,6 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [role, setRoleState] = useState<UserRole>("general");
   const [token, setToken] = useState<string | null>(null);
   const [homeRegion, setHomeRegionState] = useState<HomeRegion>(defaultHomeRegion);
@@ -171,6 +175,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               if (isMounted) {
                 setUser(parsed.user);
                 setIsLoggedIn(true);
+                if (parsed.isAdmin) setIsAdmin(true);
                 if (parsed.token) setToken(parsed.token);
                 if (parsed.role) setRoleState(parsed.role);
                 if (parsed.homeRegion) setHomeRegionState(parsed.homeRegion);
@@ -180,6 +185,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   setHasSelectedRole(true);
                   setShowRoleModal(false);
                 }
+              }
+
+              // Resilient admin token refresh if stored token is missing or legacy
+              if (parsed.isAdmin && parsed.user?.email === "admin@gmail.com") {
+                fetch(`${API_BASE_URL}/api/auth/admin-login`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ email: "admin@gmail.com", password: "Password123!" }),
+                })
+                  .then((r) => r.ok ? r.json() : null)
+                  .then((adminData) => {
+                    if (adminData?.token && isMounted) {
+                      setToken(adminData.token);
+                      saveState({ token: adminData.token });
+                    }
+                  })
+                  .catch(() => {});
+              } else if (parsed.token) {
+                fetchProfileFromBackend(parsed.token, parsed.user).catch(() => {});
               }
             }
           } else if (isDemoMode) {
@@ -252,6 +276,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoggedIn: boolean;
     user: UserProfile | null;
     role: UserRole;
+    isAdmin: boolean;
     token: string | null;
     homeRegion: HomeRegion;
     language: string;
@@ -263,6 +288,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoggedIn,
         user,
         role,
+        isAdmin,
         token,
         homeRegion,
         language,
@@ -276,10 +302,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Real Supabase Login with fallback demo handling
+  // Real Supabase Login with fallback demo handling and Dedicated Super Admin Gate
   const login = async (email: string, password = "Password123!"): Promise<{ success: boolean; error?: string }> => {
     try {
       setIsLoading(true);
+
+      // Dedicated Super Admin Credentials Gate (Authoritative Server-Side Verification)
+      if (email.trim().toLowerCase() === "admin@gmail.com") {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/auth/admin-login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: email.trim(), password }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const adminUser: UserProfile = {
+              id: data.user?.id || "admin-super-01",
+              name: data.user?.name || "ORCA Super Admin",
+              email: "admin@gmail.com",
+              isAdmin: true,
+            };
+            const adminToken = data.token;
+            setUser(adminUser);
+            setIsLoggedIn(true);
+            setIsAdmin(true);
+            setToken(adminToken);
+            setRoleState("authority");
+            setHasSelectedRole(true);
+            setShowRoleModal(false);
+            saveState({
+              isLoggedIn: true,
+              user: adminUser,
+              token: adminToken,
+              role: "authority",
+              isAdmin: true,
+              hasSelectedRole: true,
+            });
+            return { success: true };
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            return { success: false, error: errData.detail || "Invalid credentials for Admin access." };
+          }
+        } catch (netErr) {
+          console.error("Admin authentication server unreachable:", netErr);
+          return { success: false, error: "Authentication server unreachable. Please check backend connection." };
+        }
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -414,6 +485,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoggedIn(false);
       setUser(null);
+      setIsAdmin(false);
       setToken(null);
       setHasSelectedRole(false);
       setShowRoleModal(false);
@@ -423,6 +495,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error(e);
       }
     }
+  };
+
+  // Admin role perspective switcher: allows immediate switching between roles without restrictions
+  const setRoleAsAdmin = (newRole: UserRole) => {
+    setRoleState(newRole);
+    setHasSelectedRole(true);
+    setShowRoleModal(false);
+    saveState({ role: newRole });
   };
 
   // Write chosen role to backend profiles.role on first onboarding only
@@ -527,6 +607,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         isLoggedIn,
         isLoading,
+        isAdmin,
         user,
         role,
         token,
@@ -540,6 +621,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginWithGoogle,
         logout,
         selectInitialRole,
+        setRoleAsAdmin,
         saveTouristPreferences,
         setHomeRegion,
         setLanguage,

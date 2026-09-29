@@ -14,5 +14,13 @@ export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKe
   },
 });
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const sanitizeUrl = (url?: string): string => {
+  if (!url) return "http://localhost:8000";
+  let clean = url.trim();
+  if (clean.includes("=")) {
+    clean = clean.split("=").pop()?.trim() || "http://localhost:8000";
+  }
+  return clean.replace(/\/+$/, "");
+};
+
+export const API_BASE_URL = sanitizeUrl(process.env.NEXT_PUBLIC_API_URL);

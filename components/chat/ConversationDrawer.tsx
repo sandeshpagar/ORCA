@@ -105,6 +105,8 @@ export default function ConversationDrawer({
 
       {/* Drawer Container */}
       <aside
+        role="region"
+        aria-label="Conversation history"
         className={`fixed md:relative top-16 md:top-0 bottom-0 left-0 z-40 flex flex-col w-72 h-full bg-surface-container-lowest border-r border-surface-container shadow-xl md:shadow-none transition-all duration-300 ease-in-out ${
           isOpen ? "translate-x-0" : "-translate-x-full md:-ml-72"
         }`}
@@ -119,6 +121,7 @@ export default function ConversationDrawer({
             <button
               onClick={onToggle}
               className="p-1 rounded-lg hover:bg-surface-container text-on-surface-variant md:hidden transition-colors"
+              aria-label="Close conversation drawer"
               title="Close drawer"
             >
               <span className="material-symbols-outlined text-[18px]">close</span>
@@ -133,6 +136,7 @@ export default function ConversationDrawer({
             }}
             className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-primary text-on-primary hover:brightness-110 active:scale-[0.98] transition-all shadow-sm font-label-md text-label-md font-semibold group"
             id="new-chat-btn"
+            aria-label="Create new marine chat session"
           >
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-[18px] group-hover:rotate-90 transition-transform duration-200">
@@ -155,11 +159,13 @@ export default function ConversationDrawer({
               placeholder="Search conversations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search conversation history"
               className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg bg-surface-container-highest/60 border border-surface-container/80 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary/50 font-sans"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
+                aria-label="Clear search query"
                 className="material-symbols-outlined absolute right-2 top-2 text-[14px] text-on-surface-variant hover:text-on-surface"
               >
                 cancel

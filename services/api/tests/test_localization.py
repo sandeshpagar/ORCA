@@ -97,6 +97,34 @@ def test_greeting_and_role_localization():
     assert "Puri Beach" in hi_greet
     assert "29.5°C" in hi_greet
     assert "TOURIST" in hi_greet
+    assert "नमस्ते" in hi_greet
+    # Ensure zero Marathi in Hindi greeting
+    assert "मी ORCA" not in hi_greet
+    assert "आहे" not in hi_greet
+
+    # Hindi fisher role
+    hi_fisher_state = {
+        "language": "hi",
+        "role": "fisher",
+        "location": {"name": "Gujarat & Gulf of Kutch"},
+        "weather_result": {"temperature_c": 26.2, "wind_speed_kmh": 12.4},
+        "ocean_result": {"wave_height_m": 0.5},
+    }
+    hi_fisher = format_role_response(hi_fisher_state)
+    assert "ओरका (ORCA)" in hi_fisher
+    assert "SAFE" in hi_fisher
+    assert "0.5m" in hi_fisher
+    assert "12.4 km/h" in hi_fisher
+    # Check standard Hindi terms
+    assert "मछुआरा" in hi_fisher
+    assert "लहरों की ऊंचाई" in hi_fisher
+    assert "हवा की गति" in hi_fisher
+    assert "यंत्रीकृत नौकाओं के लिए" in hi_fisher
+    # Strict invariance: zero Marathi words in Hindi output
+    assert "नौकांसाठी" not in hi_fisher
+    assert "लाटांची" not in hi_fisher
+    assert "वाऱ्याचा" not in hi_fisher
+    assert "आहे" not in hi_fisher
 
     # Marathi fisher role
     mr_fisher_state = {
@@ -111,3 +139,6 @@ def test_greeting_and_role_localization():
     assert "SAFE" in mr_fisher
     assert "1.5m" in mr_fisher
     assert "18.0 km/h" in mr_fisher
+    assert "लाटांची उंची" in mr_fisher
+    assert "वाऱ्याचा वेग" in mr_fisher
+    assert "यांत्रिकी नौकांसाठी" in mr_fisher

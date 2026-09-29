@@ -4,13 +4,44 @@ from datetime import datetime
 
 
 class ChatRequest(BaseModel):
-    query: str = Field(..., min_length=1, description="User question or advisory prompt")
-    latitude: Optional[float] = Field(default=None, description="Optional target latitude")
-    longitude: Optional[float] = Field(default=None, description="Optional target longitude")
-    conversation_id: Optional[str] = Field(default=None, description="Existing conversation ID")
-    selected_model: Optional[str] = Field(default="auto", description="Selected AI model ID: 'auto', 'openrouter/llama-3.3-70b', 'openrouter/gemini-2.0-flash', 'openrouter/qwen-2.5-72b', 'ollama/local', or 'deterministic'")
-    region_name: Optional[str] = Field(default=None, description="Target coastal region or sector name (e.g. 'Goa Coastal Sector')")
-    language: Optional[str] = Field(default="en", description="Target language code: 'en', 'hi', 'mr', 'gu', 'or', 'ta'")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="User question or advisory prompt (max 1000 characters)",
+    )
+    latitude: Optional[float] = Field(
+        default=None,
+        ge=-90.0,
+        le=90.0,
+        description="Optional target latitude (-90 to 90)",
+    )
+    longitude: Optional[float] = Field(
+        default=None,
+        ge=-180.0,
+        le=180.0,
+        description="Optional target longitude (-180 to 180)",
+    )
+    conversation_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Existing conversation ID",
+    )
+    selected_model: Optional[str] = Field(
+        default="auto",
+        max_length=100,
+        description="Selected AI model ID: 'auto', 'openrouter/...', 'ollama/...', or 'deterministic'",
+    )
+    region_name: Optional[str] = Field(
+        default=None,
+        max_length=150,
+        description="Target coastal region or sector name (e.g. 'Goa Coastal Sector')",
+    )
+    language: Optional[str] = Field(
+        default="en",
+        pattern=r"^(en|hi|mr|gu|or|ta|te)(-[A-Za-z0-9]+)?$",
+        description="Target language code: 'en', 'hi', 'mr', 'gu', 'or', 'ta', 'te' or locale like 'en-IN'",
+    )
 
 
 class DataSourceInfo(BaseModel):

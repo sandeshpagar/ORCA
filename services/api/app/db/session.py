@@ -9,11 +9,16 @@ logger = logging.getLogger(__name__)
 
 FALLBACK_SQLITE_URL = "sqlite+aiosqlite:///./orca_local.db"
 
-# Create async engine
+# Create async engine with fast failover timeout
+connect_args = {}
+if "postgresql" in settings.DATABASE_URL:
+    connect_args = {"timeout": 3.0}
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
     future=True,
+    connect_args=connect_args,
 )
 
 async_session_maker = async_sessionmaker(

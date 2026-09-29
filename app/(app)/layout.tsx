@@ -5,7 +5,10 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
+import { ChatProvider, useChat } from "@/contexts/ChatContext";
+import { FeatureFlagProvider } from "@/contexts/FeatureFlagContext";
 import RoleSelectionModal from "@/components/RoleSelectionModal";
+import AdminFloatingBar from "@/components/admin/AdminFloatingBar";
 
 interface NavItem {
   name: string;
@@ -25,9 +28,24 @@ export default function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
+  return (
+    <FeatureFlagProvider>
+      <ChatProvider>
+        <AppLayoutContent>{children}</AppLayoutContent>
+      </ChatProvider>
+    </FeatureFlagProvider>
+  );
+}
+
+function AppLayoutContent({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
   const router = useRouter();
-  const { isLoggedIn, isLoading } = useAuth();
+  const { isLoggedIn, isLoading, isAdmin } = useAuth();
+  const { isLoading: isChatGenerating } = useChat();
 
   // Route protection scaffolding: redirect to /login if not authenticated
   useEffect(() => {
@@ -131,6 +149,12 @@ export default function AppLayout({
                     {item.icon}
                   </span>
                   <span>{item.name}</span>
+                  {item.href === "/chat" && isChatGenerating && (
+                    <span className="relative flex h-2 w-2 ml-0.5" title="Generating advisory in background...">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-secondary"></span>
+                    </span>
+                  )}
                   {item.badge && (
                     <span
                       className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold uppercase ${
@@ -147,8 +171,19 @@ export default function AppLayout({
             })}
           </nav>
 
-          {/* Right Controls: Profile Avatar Button */}
+          {/* Right Controls: Profile Avatar Button & Admin Portal Link */}
           <div className="flex items-center gap-2 shrink-0">
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-900 text-xs font-mono font-bold hover:bg-amber-500/25 transition-all shadow-xs"
+                title="Open Super Admin Hub"
+              >
+                <span className="material-symbols-outlined text-[15px] text-amber-700">admin_panel_settings</span>
+                <span className="hidden sm:inline">Admin Hub</span>
+              </Link>
+            )}
+
             <Link
               href="/profile"
               className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm text-on-primary transition-all ${
@@ -200,6 +235,9 @@ export default function AppLayout({
                   >
                     {item.icon}
                   </span>
+                  {item.href === "/chat" && isChatGenerating && (
+                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-secondary animate-pulse" />
+                  )}
                   {item.badge && (
                     <span className="absolute -top-1 -right-2 w-2 h-2 rounded-full bg-error animate-ping" />
                   )}
@@ -212,6 +250,9 @@ export default function AppLayout({
           })}
         </div>
       </nav>
+
+      {/* Floating Admin Command Bar (Only visible to authenticated Admin) */}
+      <AdminFloatingBar />
     </div>
   );
 }

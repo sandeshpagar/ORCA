@@ -6,6 +6,7 @@ from sqlalchemy import select, desc, func
 import logging
 
 from app.auth.deps import get_current_user, AuthenticatedUser
+from app.security.rate_limiter import rate_limit_chat
 from app.db.session import get_db
 from app.db.models import UserRoleEnum, TouristPreference, Conversation, Message
 from app.schemas.chat import (
@@ -30,6 +31,7 @@ async def chat_endpoint(
     payload: ChatRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _rate_limit: None = Depends(rate_limit_chat),
 ):
     """
     Phase 2 LangGraph Multi-Agent Orchestration endpoint:
@@ -251,12 +253,14 @@ async def list_conversations(
 ):
     """List conversation threads for the active session, sorted by recent activity."""
     try:
+        if current_user and current_user.user_id:
+            user_filter = (Conversation.user_id == current_user.user_id)
+        else:
+            user_filter = Conversation.user_id.is_(None)
+
         stmt = (
             select(Conversation)
-            .where(
-                (Conversation.user_id == current_user.user_id)
-                | (Conversation.user_id.is_(None))
-            )
+            .where(user_filter)
             .order_by(desc(Conversation.created_at))
             .limit(50)
         )
@@ -306,6 +310,13 @@ async def get_conversation(
     conv = res.scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Authoritative Object Isolation: prevent reading another user's conversation
+    if conv.user_id and conv.user_id != current_user.user_id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this conversation",
+        )
 
     msg_stmt = (
         select(Message)
@@ -375,6 +386,13 @@ async def update_conversation(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Authoritative Object Isolation: prevent modifying another user's conversation
+    if conv.user_id and conv.user_id != current_user.user_id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this conversation",
+        )
+
     conv.title = payload.title.strip()
     await db.commit()
     await db.refresh(conv)
@@ -405,6 +423,13 @@ async def delete_conversation(
     conv = res.scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Authoritative Object Isolation: prevent deleting another user's conversation
+    if conv.user_id and conv.user_id != current_user.user_id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this conversation",
+        )
 
     await db.delete(conv)
     await db.commit()
