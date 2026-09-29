@@ -29,15 +29,17 @@ jobs:
           pip install -r services/api/requirements.txt
 
       - name: Run backend pytest suite
+        working-directory: services/api
         env:
+          PYTHONPATH: .
           ENVIRONMENT: "test"
-          JWT_SECRET: "ci-test-jwt-secret-key-32charslong!"
+          SUPABASE_JWT_SECRET: "ci-test-jwt-secret-key-32charslong!"
           ADMIN_EMAIL: "admin@isro.gov.in"
           ADMIN_PASSWORD: "CiTestPassword123!"
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           TESTING: "true"
         run: |
-          pytest services/api/tests -q --durations=10
+          pytest tests -q --durations=10
 
   frontend-lint-and-build:
     name: Frontend Lint & Build (Next.js 16 + TypeScript)
