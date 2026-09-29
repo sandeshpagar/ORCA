@@ -58,11 +58,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # Attach Security Headers Middleware
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Configure CORS strictly: production locks strictly to FRONTEND_URL without regex (Task 3.1)
+# Configure CORS strictly: production locks to FRONTEND_URL and allows vercel subdomains
+cors_origins = [orig.strip() for orig in (settings.FRONTEND_URL or "").split(",") if orig.strip()]
 if settings.is_production:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.FRONTEND_URL],
+        allow_origins=cors_origins,
+        allow_origin_regex=r"^https://[a-zA-Z0-9-]+\.vercel\.app$",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
